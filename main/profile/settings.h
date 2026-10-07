@@ -35,7 +35,7 @@ typedef struct
     peripheral_settings_t peripherals;
 } wkc_settings_t;
 
-extern uint8_t current_security_storage[16][10];
+extern uint8_t current_security_storage[10][16];
 
 int clamp(int value, int min, int max);
 void local_clamp(int *value, int min, int max);

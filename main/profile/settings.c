@@ -14,7 +14,7 @@
 static wkc_settings_t current_settings = { 0 };
 
 int current_security_storage_length = 0;
-uint8_t current_security_storage[16][10] = { 0 };
+uint8_t current_security_storage[10][16] = { 0 };
 
 int clamp(int value, int min, int max)
 {
