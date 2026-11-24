@@ -48,7 +48,7 @@ int protocol_shortcut_get_current_output(uint8_t *buffer, int request_length)
     return actual_length + 1;
 }
 
-int protocol_shortcut_get_table(char *key)
+int protocol_shortcut_get_table(char *key, bool is_item)
 {
     clear_output();
     char *lock_options[] = {
@@ -107,12 +107,12 @@ int protocol_shortcut_get_table(char *key)
         }
     };
 
-    if (key == NULL)
+    if (!is_item)
     {
-        shortcut_output = wkc_table_build(groups, sizeof(groups) / sizeof(wkc_table_group_t));
-        return 0;
+        shortcut_output = wkc_table_build(groups, sizeof(groups) / sizeof(wkc_table_group_t), key);
+        return shortcut_output == NULL;
     }
-    else
+    else if (key)
     {
         cJSON *extracted = NULL;
         wkc_table_item_t *found_item = wkc_table_group_find_item(groups,
@@ -128,6 +128,7 @@ int protocol_shortcut_get_table(char *key)
         }
         else return 1;
     }
+    return 1;
 }
 
 static void shortcut_check_menu_home()
@@ -176,7 +177,7 @@ uint8_t protocol_shortcut_write(char *command)
             {
                 ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                     "menu_peripherals_disable_calibrate"), 5);
-                protocol_ble_notify_update_command("eye");
+                protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "eye");
             }
             else
             {
@@ -192,7 +193,7 @@ uint8_t protocol_shortcut_write(char *command)
             {
                 ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                     "menu_peripherals_disable_calibrate"), 5);
-                protocol_ble_notify_update_command("fan");
+                protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "fan");
             }
             else
             {
@@ -217,7 +218,7 @@ uint8_t protocol_shortcut_write(char *command)
                         lock_result_to_char(lock_result), 5);
                 shortcut_check_menu_home();
             }
-            protocol_ble_notify_update_command("lock");
+            protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "lock");
             ret = 0;
         }
         child = child->next;

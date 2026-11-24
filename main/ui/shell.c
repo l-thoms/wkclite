@@ -18,7 +18,8 @@
 typedef enum
 {
     QUEUE_EVENT_UPDATE,
-    QUEUE_EVENT_TOAST
+    QUEUE_EVENT_TOAST,
+    QUEUE_EVENT_REFRESH
 } ui_shell_queue_event_t;
 
 typedef struct
@@ -45,12 +46,12 @@ typedef struct ui_shell_t
     ui_page_t *page_backlog;
     ui_page_t **page_storage;
     int key_backlog;
-    display_format_t format_primary;
-    display_format_t format_secondary;
+    display_format_t formats[2];
     display_orientation_t orientation;
     int interval;
     QueueHandle_t queue;
     bool wakeup;
+    bool connectivity[2];
 } ui_shell_t;
 
 ui_shell_t *current_shell = NULL;
@@ -83,8 +84,8 @@ static void toast_get_region(ui_toast_t *toast, display_rect_t *bound, display_f
 static void ui_shell_clear_toast(ui_shell_t *shell, bool update)
 {
     display_rect_t bound[2];
-    toast_get_region(&shell->toast, &bound[0], shell->format_primary, shell->toast.orientation);
-    toast_get_region(&shell->toast, &bound[1], shell->format_secondary, shell->toast.orientation);
+    toast_get_region(&shell->toast, &bound[0], shell->formats[0], shell->toast.orientation);
+    toast_get_region(&shell->toast, &bound[1], shell->formats[1], shell->toast.orientation);
 
     display_rect_translate(&bound[0], shell->toast.last_offset[0], 0);
     display_rect_translate(&bound[1], shell->toast.last_offset[1], 0);
@@ -137,9 +138,9 @@ static void ui_shell_sync_toast(ui_shell_t *shell, char *msg, int duration)
     if (shell->toast.message != NULL)
     {
         display_rect_t bound_primary, bound_secondary;
-        toast_get_region(&shell->toast, &bound_primary, shell->format_primary,
+        toast_get_region(&shell->toast, &bound_primary, shell->formats[0],
                          shell->orientation);
-        toast_get_region(&shell->toast, &bound_secondary, shell->format_secondary,
+        toast_get_region(&shell->toast, &bound_secondary, shell->formats[1],
                          shell->orientation);
 
         int current_offset[2];
@@ -201,28 +202,28 @@ static void ui_shell_sync_toast(ui_shell_t *shell, char *msg, int duration)
             int selected_width = shell->orientation == DISPLAY_ORIENTATION_HORIZONTAL ?
                                  DISPLAY_WIDTH_PAL : DISPLAY_HEIGHT_PAL;
             text_position_descriptor_t *descriptor_primary = font_measure_text(shell->toast.message,
-                                       shell->format_primary, selected_width - 64,
+                                       shell->formats[0], selected_width - 64,
                                        &text_length, &text_size);
             text_position_descriptor_t *descriptor_secondary = font_measure_text(shell->toast.message,
-                                       shell->format_secondary,
+                                       shell->formats[1],
                                        selected_width - 64, &text_length, &text_size);
             display_draw_text(2, shell->orientation, bound_primary.x + 6,
                 bound_primary.y + 3, descriptor_primary, text_length,
-                DISPLAY_COLOR_WHITE, shell->format_primary);
+                DISPLAY_COLOR_WHITE, shell->formats[0]);
 
             if (shell->orientation != DISPLAY_ORIENTATION_VERTICAL_TILED)
                 display_draw_text(3, shell->orientation, bound_secondary.x + 6,
                     bound_secondary.y + 3, descriptor_secondary, text_length,
-                    DISPLAY_COLOR_WHITE, shell->format_secondary);
+                    DISPLAY_COLOR_WHITE, shell->formats[1]);
             free(descriptor_primary);
             free(descriptor_secondary);
             display_rect_expand(&bound_primary, 1, 1);
             display_rect_expand(&bound_secondary, 1, 1);
 
             display_rect_t animated_bound_primary, animated_bound_secondary;
-            toast_get_region(&shell->toast, &animated_bound_primary, shell->format_primary,
+            toast_get_region(&shell->toast, &animated_bound_primary, shell->formats[0],
                              shell->orientation);
-            toast_get_region(&shell->toast, &animated_bound_secondary, shell->format_secondary,
+            toast_get_region(&shell->toast, &animated_bound_secondary, shell->formats[1],
                              shell->orientation);
             display_rect_translate(&animated_bound_primary, shell->toast.last_offset[0], 0);
             display_rect_translate(&animated_bound_secondary, shell->toast.last_offset[1], 0);
@@ -264,6 +265,13 @@ void ui_shell_show_page(ui_shell_t *shell, ui_page_t *page)
             }, configTICK_RATE_HZ);
             return;
         }
+}
+
+void ui_shell_refresh(ui_shell_t *shell)
+{
+    xQueueSendToBack(shell->queue, &(ui_shell_queue_info_t) {
+        .event_type = QUEUE_EVENT_REFRESH
+    }, configTICK_RATE_HZ);
 }
 
 void ui_shell_add_page(ui_shell_t *shell, ui_page_t *page)
@@ -310,8 +318,8 @@ void ui_shell_send_key(ui_shell_t *shell, int key_code)
 ui_shell_t *ui_shell_create()
 {
     ui_shell_t *result = (ui_shell_t*)calloc(1, sizeof(ui_shell_t));
-    result->format_primary = DISPLAY_FORMAT_PAL;
-    result->format_secondary = DISPLAY_FORMAT_PAL;
+    result->formats[0] = DISPLAY_FORMAT_PAL;
+    result->formats[1] = DISPLAY_FORMAT_PAL;
     result->orientation = DISPLAY_ORIENTATION_HORIZONTAL;
     result->page_storage = (ui_page_t**)calloc(sizeof(ui_shell_t*) * MAX_PAGE_STORAGE_COUNT, 1);
     result->key_backlog = -1;
@@ -371,23 +379,34 @@ void ui_shell_mainloop(ui_shell_t *shell)
             {
                 display_format_t formats[2];
                 display_control_get_formats(formats);
+                bool connectivity[2];
+                display_get_connectivity(connectivity);
                 display_orientation_t new_orientation = (display_orientation_t)
                                     wkc_settings_get_current()->display.orientation;
-                if (shell->format_primary != formats[0] ||
-                    shell->format_secondary != formats[1] ||
-                    shell->orientation != new_orientation)
+                bool format_changed = memcmp(shell->formats, formats,
+                                             sizeof(shell->formats));
+                bool connectivity_changed = memcmp(shell->connectivity, connectivity,
+                                                   sizeof(shell->connectivity));
+                if (format_changed ||
+                    shell->orientation != new_orientation ||
+                    queue_info.event_type == QUEUE_EVENT_REFRESH ||
+                    connectivity_changed)
                 {
-                    if (shell->format_primary != formats[0] ||
-                    shell->format_secondary != formats[1])
-                        vTaskDelay(2100 / portTICK_PERIOD_MS);
+                    if (format_changed || connectivity_changed)
+                    {
+                        display_invalidate_alignment();
+                        display_wait_for_alignment();
+                    }
                     ui_shell_close_toast(shell);
-                    ui_page_on_format_changed(current);
-                    shell->format_primary = formats[0];
-                    shell->format_secondary = formats[1];
+                    ui_page_on_refresh(current);
+                    memcpy(shell->formats, formats, sizeof(shell->formats));
+                    memcpy(shell->connectivity, connectivity, sizeof(shell->connectivity));
                     shell->orientation = new_orientation;
                 }
-                ui_page_on_draw(current, (display_format_t[]) {
-                    shell->format_primary, shell->format_secondary }, shell->orientation);
+
+                display_format_t draw_formats[2];
+                memcpy(draw_formats, shell->formats, sizeof(draw_formats));
+                ui_page_on_draw(current, draw_formats, shell->orientation);
             }
             if (queue_info.event_type == QUEUE_EVENT_TOAST)
                 ui_shell_sync_toast(shell, queue_info.msg, queue_info.num);

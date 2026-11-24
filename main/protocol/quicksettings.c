@@ -2,7 +2,9 @@
 #include <string.h>
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "command_parser.h"
+#include "ble.h"
 #include "profile/translations.h"
 #include "profile/settings.h"
 #include "profile/userprofile.h"
@@ -48,46 +50,82 @@ int protocol_quicksettings_get_current_output(uint8_t *buffer, int request_lengt
     return actual_length + 1;
 }
 
-int protocol_quicksettings_get_table(char *key)
+int protocol_quicksettings_get_table(char *key, bool is_item)
 {
     clear_output();
     wkc_userprofile_acquire_semaphore();
     wkc_userprofile_t *profile = wkc_userprofile_get_current();
+    wkc_settings_t *settings = wkc_settings_get_current();
+    char background_color_str[7] = { 0 };
+    if (settings->background_color >= 0 && settings->background_color <= 0xFFFFFF)
+        sprintf(background_color_str, "%06X", settings->background_color);
+    int language_count = wkc_translations_get_languages_count();
+    char *language_options[language_count];
+    for (int i = 0; i < language_count; i++)
+        language_options[i] = wkc_translations_get_language_name_from_index(i);
     wkc_table_item_t userprofile_items[] = {
         {
             .type = WKC_TABLE_ITEM_STRING,
             .name = "device_name",
             .display_name = wkc_translations_get_string("device_info_device_name"),
             .length = 30,
-            .string = profile->device_name
+            .string = profile->device_name ? profile->device_name : ""
         },
         {
             .type = WKC_TABLE_ITEM_STRING,
             .name = "owner",
             .display_name = wkc_translations_get_string("device_info_owner"),
             .length = 30,
-            .string = profile->owner
+            .string = profile->owner ? profile->owner : ""
         },
         {
             .type = WKC_TABLE_ITEM_STRING,
             .name = "character",
             .display_name = wkc_translations_get_string("device_info_character"),
             .length = 30,
-            .string = profile->character
+            .string = profile->character ? profile->character : ""
         },
         {
             .type = WKC_TABLE_ITEM_STRING,
             .name = "manufacturer",
             .display_name = wkc_translations_get_string("device_info_manufacturer"),
             .length = 30,
-            .string = profile->manufacturer
+            .string = profile->manufacturer ? profile->manufacturer : ""
+        },
+        {
+            .type = WKC_TABLE_ITEM_STRING,
+            .name = "personal_signature",
+            .display_name = wkc_translations_get_string("device_info_personal_signature"),
+            .length = 100,
+            .string = profile->personal_signature ? profile->personal_signature : ""
+        },
+        {
+            .type = WKC_TABLE_ITEM_STRING,
+            .name = "background_color",
+            .display_name = wkc_translations_get_string("device_info_background_color"),
+            .length = 6,
+            .string = background_color_str
+        },
+        {
+            .type = WKC_TABLE_ITEM_STRING,
+            .name = "background_image_url",
+            .display_name = wkc_translations_get_string("device_info_background_image_url"),
+            .length = 100,
+            .string = profile->background_image_url ? profile->background_image_url : ""
+        },
+        {
+            .type = WKC_TABLE_ITEM_PICKER,
+            .name = "language",
+            .display_name = wkc_translations_get_string("settings_language"),
+            .count = language_count,
+            .options = language_options,
+            .value = settings->language
         },
         {
             .type = WKC_TABLE_ITEM_END
         }
     };
 
-    wkc_settings_t *settings = wkc_settings_get_current();
     char *screen_orientation_options[] = {
         wkc_translations_get_string("settings_horizontal"),
         wkc_translations_get_string("settings_vertical"),
@@ -148,6 +186,14 @@ int protocol_quicksettings_get_table(char *key)
         wkc_translations_get_string("settings_top"),
         wkc_translations_get_string("settings_bottom")
     };
+    char *chat_status_options[] = {
+        wkc_translations_get_string("settings_chat_status_disabled"),
+        wkc_translations_get_string("settings_chat_status_limited"),
+        wkc_translations_get_string("settings_chat_status_open")
+    };
+    char chat_passkey_str[7] = { 0 };
+    if (settings->chat_passkey >= 0 && settings->chat_passkey < (int)1e6)
+        sprintf(chat_passkey_str, "%06d", settings->chat_passkey);
     wkc_table_item_t misc_items[] = {
         {
             .type = WKC_TABLE_ITEM_PICKER,
@@ -178,6 +224,25 @@ int protocol_quicksettings_get_table(char *key)
             .value = settings->homepage_status_bar_position
         },
         {
+            .type = WKC_TABLE_ITEM_PICKER,
+            .name = "chat_status",
+            .display_name = wkc_translations_get_string("settings_chat_status"),
+            .count = 3,
+            .options = chat_status_options,
+            .value = settings->chat_status
+        },
+        {
+            .type = settings->chat_status == WKC_CHAT_STATUS_LIMITED &&
+                    protocol_ble_compare_versions(protocol_ble_get_client_version(),
+                    (uint8_t[]) { 0, 3, 0, 0 }) >= 0 ?
+                                             WKC_TABLE_ITEM_ACTION:
+                                             WKC_TABLE_ITEM_SKIP,
+            .name = "chat_passkey",
+            .display_name = wkc_translations_get_string("settings_chat_passkey"),
+            .count = 1,
+            .options = (char**)&chat_passkey_str
+        },
+        {
             .type = WKC_TABLE_ITEM_END
         }
     };
@@ -199,13 +264,13 @@ int protocol_quicksettings_get_table(char *key)
         }
     };
 
-    if (key == NULL)
+    if (!is_item)
     {
-        quicksettings_output = wkc_table_build(groups, sizeof(groups) / sizeof(wkc_table_group_t));
+        quicksettings_output = wkc_table_build(groups, sizeof(groups) / sizeof(wkc_table_group_t), key);
         wkc_userprofile_release_semaphore();
-        return 0;
+        return quicksettings_output == NULL;
     }
-    else
+    else if (key)
     {
         cJSON *extracted = NULL;
         wkc_table_item_t *found_item = wkc_table_group_find_item(groups,
@@ -229,6 +294,7 @@ int protocol_quicksettings_get_table(char *key)
             return 1;
         }
     }
+    return 1;
 }
 
 static void quicksettings_check_settings_home()
@@ -237,8 +303,7 @@ static void quicksettings_check_settings_home()
     ui_page_t *page = ui_shell_get_current_page(shell);
     if (page->type == UI_PAGE_TYPE_SETTINGS)
     {
-        ui_page_t *home = ui_shell_find_page(shell, UI_PAGE_TYPE_HOME);
-        ui_shell_show_page(shell, home);
+        ui_shell_refresh(shell);
     }
     else if (page->type == UI_PAGE_TYPE_HOME)
     {
@@ -261,6 +326,7 @@ uint8_t protocol_quicksettings_write(char *command)
     wkc_userprofile_t *profile = wkc_userprofile_get_current();
     wkc_settings_t *settings = wkc_settings_get_current();
     int ret = 1;
+    bool update_misc_table = false;
     do
     {
         if (!child->string) continue;
@@ -289,6 +355,42 @@ uint8_t protocol_quicksettings_write(char *command)
         {
             free(profile->manufacturer);
             profile->manufacturer = font_crop_text(cJSON_GetStringValue(child), 30);
+            wkc_userprofile_save();
+            ret = 0;
+        }
+        else if (strcmp(child->string, "personal_signature") == 0)
+        {
+            free(profile->personal_signature);
+            profile->personal_signature = font_crop_text(cJSON_GetStringValue(child), 100);
+            wkc_userprofile_save();
+            ret = 0;
+        }
+        else if (strcmp(child->string, "background_color") == 0)
+        {
+            int color = 0, avail = 0;
+            char *color_value = cJSON_GetStringValue(child);
+            if (!color_value || strlen(color_value) == 0)
+                color = -1;
+            else do
+            {
+                if (*color_value >= 'a' && *color_value <= 'f')
+                    *color_value -= 'a' - 'A';
+
+                if (*color_value >= '0' && *color_value <= '9')
+                    color += (*color_value - '0') << (4 * (5 - avail++));
+                else if (*color_value >= 'A' && *color_value <= 'F')
+                    color += (*color_value - 'A' + 10) << (4 * (5 - avail++));
+            } while (avail < 6 && *++color_value != '\0');
+            if (color == -1 || avail == 6)
+                settings->background_color = color;
+
+            wkc_settings_save();
+            ret = 0;
+        }
+        else if (strcmp(child->string, "background_image_url") == 0)
+        {
+            free(profile->background_image_url);
+            profile->background_image_url = font_crop_text(cJSON_GetStringValue(child), 100);
             wkc_userprofile_save();
             ret = 0;
         }
@@ -344,9 +446,41 @@ uint8_t protocol_quicksettings_write(char *command)
             quicksettings_update();
             ret = 0;
         }
+        else if (strcmp(child->string, "chat_status") == 0)
+        {
+            if (settings->chat_status != WKC_CHAT_STATUS_LIMITED &&
+                (int)cJSON_GetNumberValue(child) == WKC_CHAT_STATUS_LIMITED ||
+                settings->chat_status == WKC_CHAT_STATUS_LIMITED &&
+                (int)cJSON_GetNumberValue(child) != WKC_CHAT_STATUS_LIMITED)
+                update_misc_table = true;
+            settings->chat_status = clamp((int)cJSON_GetNumberValue(child), 0, 2);
+            quicksettings_update();
+            ret = 0;
+        }
+        else if (strcmp(child->string, "chat_passkey") == 0)
+        {
+            update_misc_table = true;
+            settings->chat_passkey = esp_random() % (int)1e6;
+            quicksettings_update();
+            ret = 0;
+        }
+        else if (strcmp(child->string, "language") == 0)
+        {
+            settings->language = clamp((int)cJSON_GetNumberValue(child), 0,
+                wkc_translations_get_languages_count() - 1);
+            ui_shell_refresh(ui_shell_get_current());
+            wkc_settings_save();
+            protocol_ble_notify_update_table(WKC_CATEGORY_SHORTCUT, NULL);
+            protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, NULL);
+            ret = 0;
+        }
         child = child->next;
     } while(child);
     wkc_userprofile_release_semaphore();
+    if (update_misc_table)
+    {
+        protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, "misc_settings");
+    }
     cJSON_Delete(command_json);
     return ret;
 }

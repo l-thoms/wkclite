@@ -130,6 +130,21 @@
         "zh_cn": "协议版本",
         "zh_tw": "協議版本"
     },
+    "device_info_personal_signature": {
+        "en_us": "Personal Signature",
+        "zh_cn": "个性签名",
+        "zh_tw": "個性簽名"
+    },
+    "device_info_background_color": {
+        "en_us": "Background Color",
+        "zh_cn": "名片背景色",
+        "zh_tw": "名片背景色"
+    },
+    "device_info_background_image_url": {
+        "en_us": "Background Image URL",
+        "zh_cn": "名片背景图URL",
+        "zh_tw": "名片背景圖URL"
+    },
     "files_empty_directory": {
         "en_us": "Capture directory is empty",
         "zh_cn": "相册目录为空",
@@ -400,6 +415,31 @@
         "zh_cn": "语言",
         "zh_tw": "語言"
     },
+    "settings_chat_status": {
+        "en_us": "Chat Status",
+        "zh_cn": "对话状态",
+        "zh_tw": "對話狀態"
+    },
+    "settings_chat_status_open": {
+        "en_us": "Open Access",
+        "zh_cn": "开放",
+        "zh_tw": "開放"
+    },
+    "settings_chat_status_limited": {
+        "en_us": "Limited",
+        "zh_cn": "仅认证过的设备",
+        "zh_tw": "僅認證過的設備"
+    },
+    "settings_chat_status_disabled": {
+        "en_us": "Disabled",
+        "zh_cn": "禁用",
+        "zh_tw": "禁用"
+    },
+    "settings_chat_passkey": {
+        "en_us": "Chat Passkey",
+        "zh_cn": "对话码",
+        "zh_tw": "對話碼"
+    },
     "ble_passkey": {
         "en_us": "Pass key: ",
         "zh_cn": "验证码: ",
@@ -409,6 +449,12 @@
         "en_us": "Please disconnect previous device",
         "zh_cn": "请断开上一设备",
         "zh_tw": "請斷開上一設備"
+    },
+    "ble_exit_chat_session":
+    {
+        "en_us": "Please exit chat session",
+        "zh_cn": "请结束当前对话会话",
+        "zh_tw": "請結束當前對話會話"
     },
     "ble_verification_success": {
         "en_us": "Verification successed",
@@ -424,6 +470,16 @@
         "en_us": "Device disconnected",
         "zh_cn": "设备断开连接",
         "zh_tw": "設備斷開連接"
+    },
+    "ble_message_from_format": {
+        "en_us": "Message From %s:\n%s",
+        "zh_cn": "来自 %s 的消息:\n%s",
+        "zh_tw": "來自 %s 的訊息:\n%s"
+    },
+    "ble_message_unknown_device": {
+        "en_us": "<Unknown Device>",
+        "zh_cn": "<未知设备>",
+        "zh_tw": "<未知設備>"
     },
     "camera_error_update": {
         "en_us": "Some error occurs when updating settings",

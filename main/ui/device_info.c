@@ -8,9 +8,9 @@
 #include "freertos/semphr.h"
 #include "protocol/ble.h"
 
-#define LOGO_PREFIX "/data_static/priv_images/wkclite_logo_"
-#define LOGO_WIDTH_PAL 120
-#define LOGO_WIDTH_NTSC 100
+#define LOGO_PREFIX "/data_static/priv_images/wkc_accessory_"
+#define LOGO_WIDTH_PAL 138
+#define LOGO_WIDTH_NTSC 115
 
 typedef struct
 {
@@ -100,7 +100,7 @@ void ui_device_info_on_draw(ui_device_info_t *device_info, display_format_t* for
     sprintf(mac_address, "%02X:%02X:%02X:%02X:%02X:%02X",
         mac_raw[0], mac_raw[1], mac_raw[2], mac_raw[3], mac_raw[4], mac_raw[5]);
     char protocol_version[17];
-    uint8_t *protocol_version_block = protocol_get_version();
+    uint8_t *protocol_version_block = protocol_ble_get_version();
     sprintf(protocol_version, "v%d.%d.%d.%d",
             (int)protocol_version_block[0],
             (int)protocol_version_block[1],
@@ -222,7 +222,7 @@ void ui_device_info_on_key_event(ui_device_info_t *device_info, int key_code)
     }
 }
 
-void ui_device_info_on_format_changed(ui_device_info_t *device_info)
+void ui_device_info_on_refresh(ui_device_info_t *device_info)
 {
     if (wkc_settings_get_current()->display.orientation == DISPLAY_ORIENTATION_VERTICAL_TILED)
         DISPLAY_CLEAR_SCREEN(0);
@@ -237,6 +237,6 @@ ui_page_t *ui_device_info_create()
     device_info->base.on_show = (ui_page_event_t)ui_device_info_on_show;
     device_info->base.on_draw = (ui_page_draw_event_t)ui_device_info_on_draw;
     device_info->base.on_key_event = (ui_page_key_event_t)ui_device_info_on_key_event;
-    device_info->base.on_format_changed = (ui_page_event_t)ui_device_info_on_format_changed;
+    device_info->base.on_refresh = (ui_page_event_t)ui_device_info_on_refresh;
     return (ui_page_t*)device_info;
 }

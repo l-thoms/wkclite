@@ -41,10 +41,10 @@ void ui_page_on_mainloop(ui_page_t *page, bool on_foreground)
         page->on_mainloop(page, on_foreground);
 }
 
-void ui_page_on_format_changed(ui_page_t *page)
+void ui_page_on_refresh(ui_page_t *page)
 {
-    if (page->on_format_changed != NULL)
-        page->on_format_changed(page);
+    if (page->on_refresh != NULL)
+        page->on_refresh(page);
 }
 
 void ui_page_on_wakeup(ui_page_t *page)

@@ -6,6 +6,8 @@ typedef struct
     char *owner;
     char *character;
     char *manufacturer;
+    char *personal_signature;
+    char *background_image_url;
 } wkc_userprofile_t;
 
 void wkc_userprofile_init();

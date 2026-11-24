@@ -1874,8 +1874,9 @@ static void ui_camera_on_key_event(ui_camera_t *camera, int key_code)
     }
 }
 
-static void ui_camera_on_format_changed(ui_camera_t *camera)
+static void ui_camera_on_refresh(ui_camera_t *camera)
 {
+    while(ui_camera_menu_pop(camera));
     camera->show = true;
     camera_set_channel(camera_control_get_current()->channel);
 }
@@ -1924,7 +1925,7 @@ ui_page_t *ui_camera_create()
     camera->base.on_draw = (ui_page_draw_event_t)ui_camera_on_draw;
     camera->base.on_key_event = (ui_page_key_event_t)ui_camera_on_key_event;
     camera->base.on_mainloop = (ui_page_mainloop_event_t)ui_camera_on_mainloop;
-    camera->base.on_format_changed = (ui_page_event_t)ui_camera_on_format_changed;
+    camera->base.on_refresh = (ui_page_event_t)ui_camera_on_refresh;
     camera->base.on_wakeup = (ui_page_event_t)ui_camera_on_wakeup;
     return (ui_page_t*)camera;
 }

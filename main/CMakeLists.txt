@@ -4,4 +4,5 @@ idf_component_register(SRCS ${WKC_LITE_CS}
                        PRIV_REQUIRES spi_flash nvs_flash bt esp_driver_i2c
                        esp_adc driver spiffs esp-tls esp_psram esp_driver_i2s
                        esp_driver_ledc esp32-camera esp_driver_sdmmc fatfs
+                       esp_driver_uart
                        INCLUDE_DIRS "")

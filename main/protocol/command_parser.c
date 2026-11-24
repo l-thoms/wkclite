@@ -77,7 +77,7 @@ uint8_t *wkc_command_unpack(uint8_t *command, int length, int *output_length)
     }
     uint8_t *result = calloc(length - 28, 1);
 
-    int status = protocol_security_decrypt(command, length, result, output_length);
+    int status = protocol_security_decrypt_aes(command, length, result, output_length);
     if (status) goto command_unpack_failed;
 
     // Verify timestamp
@@ -106,7 +106,7 @@ uint8_t *wkc_command_pack(uint8_t *command, int length, int *output_length)
     gettimeofday(&tv, NULL);
     uint64_t tx_time = tv.tv_sec * 1000000 + tv.tv_usec;
     memcpy(&command_with_timestamp[length], &tx_time, 8);
-    int status = protocol_security_encrypt(command_with_timestamp, length + 8, result,
+    int status = protocol_security_encrypt_aes(command_with_timestamp, length + 8, result,
                                            output_length);
     free(command_with_timestamp);
     if (status == 0)
@@ -168,21 +168,22 @@ int wkc_write_command(uint16_t conn_handle, uint16_t attr_handle,
         }
         break;
         case WKC_CMD_READ_SHORTCUT_TABLE:
-            protocol_shortcut_get_table(NULL);
-            WKC_NOTIFY_DEFAULT();
+            WKC_NOTIFY_SINGLE(!!protocol_shortcut_get_table(length == 1 ? NULL :
+                (char*)&command[1], false));
             break;
         case WKC_CMD_READ_SHORTCUT_ITEM:
-            WKC_NOTIFY_SINGLE(!!protocol_shortcut_get_table((char*)&command[1]));
+            WKC_NOTIFY_SINGLE(!!protocol_shortcut_get_table((char*)&command[1], true));
             break;
         case WKC_CMD_WRITE_SHORTCUT:
             WKC_NOTIFY_SINGLE(!!protocol_shortcut_write((char*)&command[1]));
             break;
         case WKC_CMD_READ_SETTINGS_TABLE:
-            protocol_quicksettings_get_table(NULL);
+            WKC_NOTIFY_SINGLE(!!protocol_quicksettings_get_table(length == 1 ? NULL :
+                (char*)&command[1], false));
             WKC_NOTIFY_DEFAULT();
             break;
         case WKC_CMD_READ_SETTINGS_ITEM:
-            WKC_NOTIFY_SINGLE(!!protocol_quicksettings_get_table((char*)&command[1]));
+            WKC_NOTIFY_SINGLE(!!protocol_quicksettings_get_table((char*)&command[1], true));
             break;
         case WKC_CMD_WRITE_SETTINGS:
             WKC_NOTIFY_SINGLE(!!protocol_quicksettings_write((char*)&command[1]));
@@ -314,11 +315,13 @@ cJSON *wkc_table_item_extract(wkc_table_item_t *item, bool value_only)
     return item_json;
 }
 
-char *wkc_table_build(wkc_table_group_t *groups, int group_num)
+char *wkc_table_build(wkc_table_group_t *groups, int group_num, char *name)
 {
-    cJSON *table_json = cJSON_CreateArray();
+    char *result = NULL;
+    cJSON *table_json = name ? NULL : cJSON_CreateArray();
     for (int i = 0; i < group_num; i++)
     {
+        if (name && strcmp(groups[i].name, name)) continue;
         cJSON *group_json = cJSON_CreateObject();
         cJSON_AddStringToObject(group_json, "name", groups[i].name);
         cJSON_AddStringToObject(group_json, "display_name", groups[i].display_name);
@@ -328,14 +331,25 @@ char *wkc_table_build(wkc_table_group_t *groups, int group_num)
         while (groups[i].items[j].type != WKC_TABLE_ITEM_END)
         {
             wkc_table_item_t *item = &groups[i].items[j];
-            cJSON *item_json = wkc_table_item_extract(item, false);
-            cJSON_AddItemToArray(items_json, item_json);
+            if (item->type != WKC_TABLE_ITEM_SKIP)
+            {
+                cJSON *item_json = wkc_table_item_extract(item, false);
+                cJSON_AddItemToArray(items_json, item_json);
+            }
             j += 1;
         }
 
-        cJSON_AddItemToArray(table_json, group_json);
+        if (!name)
+            cJSON_AddItemToArray(table_json, group_json);
+        else
+        {
+            result = cJSON_Print(group_json);
+            cJSON_Delete(group_json);
+            return result;
+        }
     }
-    char *result = cJSON_Print(table_json);
+    if (name) return NULL;
+    result = cJSON_Print(table_json);
     cJSON_Delete(table_json);
     return result;
 }

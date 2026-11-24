@@ -1018,7 +1018,7 @@ static void ui_files_on_key_event(ui_files_t *files, int key_code)
     }
 }
 
-static void ui_files_on_format_changed(ui_files_t *files)
+static void ui_files_on_refresh(ui_files_t *files)
 {
     files->show = true;
     files->draw_request = true;
@@ -1037,7 +1037,7 @@ ui_page_t *ui_files_create()
     files->base.on_show = (ui_page_event_t)ui_files_on_show;
     files->base.on_draw = (ui_page_draw_event_t)ui_files_on_draw;
     files->base.on_key_event = (ui_page_key_event_t)ui_files_on_key_event;
-    files->base.on_format_changed = (ui_page_event_t)ui_files_on_format_changed;
+    files->base.on_refresh = (ui_page_event_t)ui_files_on_refresh;
     files->base.on_mainloop = (ui_page_mainloop_event_t)ui_files_on_mainloop;
     return (ui_page_t*)files;
 }

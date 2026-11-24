@@ -1,20 +1,25 @@
 #include <stdio.h>
 #include "esp_system.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "cJSON.h"
 #include "settings.h"
 #include "io/filesystem.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #define SETTINGS_PATH_DEFAULT "/data_static/profile/settings.json"
 #define SETTINGS_PATH_ACTIVE "/data_dynamic/profile/settings.json"
 #define SECURITY_PATH_ACTIVE "/data_dynamic/profile/security.bin"
+#define CHAT_ONLY_PATH_ACTIVE "/data_dynamic/profile/chat_only.bin"
 
 static wkc_settings_t current_settings = { 0 };
+SemaphoreHandle_t settings_semaphore = NULL;
 
 int current_security_storage_length = 0;
+int current_chat_only_storage_length = 0;
 uint8_t current_security_storage[10][16] = { 0 };
+uint8_t current_chat_only_storage[20][16] = { 0 };
 
 int clamp(int value, int min, int max)
 {
@@ -39,6 +44,7 @@ void wkc_settings_load_default()
 void wkc_security_load_default()
 {
     wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage, 0);
+    wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage, 0);
 }
 
 static void settings_parse()
@@ -61,7 +67,9 @@ static void settings_parse()
           *power_save = cJSON_GetObjectItem(settings_json, "power_save"),
           *display = cJSON_GetObjectItem(settings_json, "display"),
           *peripherals = cJSON_GetObjectItem(settings_json, "peripherals"),
-          *homepage_status_bar_position = cJSON_GetObjectItem(settings_json, "homepage_status_bar_position");
+          *homepage_status_bar_position = cJSON_GetObjectItem(settings_json, "homepage_status_bar_position"),
+          *chat_status = cJSON_GetObjectItem(settings_json, "chat_status"),
+          *background_color = cJSON_GetObjectItem(settings_json, "background_color");
 
     if (language)
         current_settings.language = (int)cJSON_GetNumberValue(language);
@@ -87,6 +95,13 @@ static void settings_parse()
             current_settings.display.capture_osd = (int)cJSON_IsTrue(capture_osd);
         if (homepage_status_bar_position)
             current_settings.homepage_status_bar_position = !!(int)cJSON_GetNumberValue(homepage_status_bar_position);
+        if (chat_status)
+            current_settings.chat_status = (int)cJSON_GetNumberValue(chat_status);
+        if (background_color)
+            current_settings.background_color = clamp((int)cJSON_GetNumberValue(
+                                                background_color), -1, 0xFFFFFF);
+        else
+            current_settings.background_color = -1;
 
         if (position && cJSON_GetArraySize(position) >= 2)
         {
@@ -126,26 +141,43 @@ static void settings_parse()
         }
     }
 
+    current_settings.chat_passkey = esp_random() % (int)1e06;
+
     cJSON_Delete(settings_json);
+}
+
+static void keys_parse(const char *path, uint8_t *storage, int *length, int storage_size)
+{
+    size_t keys_size;
+    if (wkc_get_file_size(path, &keys_size))
+    {
+        *length = 0;
+        return;
+    }
+    if (keys_size > storage_size)
+        keys_size = storage_size;
+    wkc_open(path, (char*)storage, keys_size);
+    *length = keys_size / 16;
 }
 
 static void security_parse()
 {
-    size_t security_size;
-    if (wkc_get_file_size(SECURITY_PATH_ACTIVE, &security_size)) return;
-    if (security_size > sizeof(current_security_storage))
-        security_size = sizeof(current_security_storage);
-    wkc_open(SECURITY_PATH_ACTIVE, (char*)current_security_storage, security_size);
-    current_security_storage_length = security_size / 16;
+    keys_parse(SECURITY_PATH_ACTIVE, (uint8_t*)current_security_storage,
+        &current_security_storage_length,  sizeof(current_security_storage));
+
+    keys_parse(CHAT_ONLY_PATH_ACTIVE, (uint8_t*)current_chat_only_storage,
+        &current_chat_only_storage_length,  sizeof(current_chat_only_storage));
 }
 
-char* wkc_settings_write()
+static char* settings_write()
 {
     cJSON *settings_json = cJSON_CreateObject();
     cJSON_AddNumberToObject(settings_json, "language", current_settings.language);
     cJSON_AddBoolToObject(settings_json, "keep_advertise", current_settings.keep_advertise);
     cJSON_AddNumberToObject(settings_json, "power_save", current_settings.power_save);
     cJSON_AddNumberToObject(settings_json, "homepage_status_bar_position", current_settings.homepage_status_bar_position);
+    cJSON_AddNumberToObject(settings_json, "chat_status", current_settings.chat_status);
+    cJSON_AddNumberToObject(settings_json, "background_color", current_settings.background_color);
     cJSON *display = cJSON_AddObjectToObject(settings_json, "display");
     cJSON_AddNumberToObject(display, "orientation", current_settings.display.orientation);
     cJSON_AddNumberToObject(display, "output_mode", current_settings.display.output_mode);
@@ -175,30 +207,50 @@ char* wkc_settings_write()
 
 void wkc_settings_save()
 {
-    char *result = wkc_settings_write();
+    xSemaphoreTake(settings_semaphore, portMAX_DELAY);
+    char *result = settings_write();
     wkc_save(SETTINGS_PATH_ACTIVE, result, strlen(result) + 1);
     free(result);
+    xSemaphoreGive(settings_semaphore);
 }
 
-void wkc_security_save()
+static void wkc_security_save()
 {
     wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage,
              16 * current_security_storage_length);
+    wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage,
+             16 * current_chat_only_storage_length);
+}
+
+static void append_key(uint8_t *key, uint8_t *storage, int *length, int max_length)
+{
+    xSemaphoreTake(settings_semaphore, portMAX_DELAY);
+    for (int i = max_length - 2; i >= 0; i--)
+    {
+        memcpy(&storage[(i + 1) * 16], &storage[i * 16], 16);
+    }
+    memcpy(&storage[0], key, 16);
+    if (*length < max_length) *length += 1;
+    wkc_security_save();
+    xSemaphoreGive(settings_semaphore);
 }
 
 void wkc_security_append_key(uint8_t *key)
 {
-    for (int i = 8; i >= 0; i--)
-    {
-        memcpy(current_security_storage[i + 1], current_security_storage[i], 16);
-    }
-    memcpy(current_security_storage[0], key, 16);
-    if (current_security_storage_length < 10) current_security_storage_length += 1;
-    wkc_security_save();
+    append_key(key, (uint8_t*)current_security_storage, &current_security_storage_length,
+        sizeof(current_security_storage) / 16);
+}
+
+void wkc_chat_only_append_key(uint8_t *key)
+{
+    append_key(key, (uint8_t*)current_chat_only_storage, &current_chat_only_storage_length,
+        sizeof(current_chat_only_storage) / 16);
 }
 
 void wkc_settings_init()
 {
+    if (settings_semaphore == NULL)
+        settings_semaphore = xSemaphoreCreateMutex();
     if(!wkc_file_exist(SETTINGS_PATH_ACTIVE))
     {
         ESP_LOGW("WKC_SETTINGS", "Settings does not exist, create default");
@@ -211,9 +263,9 @@ void wkc_settings_init()
 
 void wkc_security_init()
 {
-    if(!wkc_file_exist(SETTINGS_PATH_ACTIVE))
+    if(!wkc_file_exist(SECURITY_PATH_ACTIVE))
     {
-        ESP_LOGW("WKC_SETTINGS", "Settings does not exist, create default");
+        ESP_LOGW("WKC_SETTINGS", "Security does not exist, create default");
         wkc_security_load_default();
         wkc_security_init();
         return;
@@ -224,4 +276,19 @@ void wkc_security_init()
 int wkc_get_security_storage_length()
 {
     return current_security_storage_length;
+}
+
+int wkc_get_chat_only_storage_length()
+{
+    return current_chat_only_storage_length;
+}
+
+uint8_t *wkc_security_storage_get_current()
+{
+    return (uint8_t*)current_security_storage;
+}
+
+uint8_t *wkc_chat_only_storage_get_current()
+{
+    return (uint8_t*)current_chat_only_storage;
 }

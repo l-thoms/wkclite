@@ -8,6 +8,8 @@
 #include "io/i2c_bus.h"
 #include "io/io_extend.h"
 #include "io/power_key.h"
+#include "io/serialport.h"
+#include "io/serialport.h"
 #include "profile/userprofile.h"
 #include "profile/settings.h"
 #include "profile/translations.h"
@@ -85,6 +87,8 @@ void app_main(void)
     ESP_LOGI("MAIN", "Init display...");
     display_control_init();
     vTaskDelay(500 / portTICK_PERIOD_MS);
+    display_invalidate_alignment();
+    display_wait_for_alignment();
 
     ui_shell_t *shell = ui_shell_create();
 
@@ -107,6 +111,9 @@ void app_main(void)
     ui_shell_show_page(shell, home);
     power_key_set_shell(shell);
     lock_set_shell(shell);
+
+    ESP_LOGI("MAIN", "Init serial port...");
+    serialport_init();
 
     bool plugged;
     adc_monitor_read_battery(NULL, NULL, &plugged);

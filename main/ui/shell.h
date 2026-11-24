@@ -5,6 +5,7 @@
 
 void ui_shell_show_toast(ui_shell_t *shell, char *message, int duration);
 void ui_shell_show_page(ui_shell_t *shell, ui_page_t *page);
+void ui_shell_refresh(ui_shell_t *shell);
 ui_page_t *ui_shell_get_current_page(ui_shell_t *shell);
 ui_page_t *ui_shell_find_page(ui_shell_t *shell, ui_page_type_t type);
 display_orientation_t ui_shell_get_orientation(ui_shell_t *shell);

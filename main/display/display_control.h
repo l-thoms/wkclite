@@ -23,6 +23,7 @@
 #define I2S_FRAME_SIZE_NTSC 250250
 
 #define SYNC_ITEMS_COUNT 5
+#define SYNC_LEVEL_COUNT 10
 #define COMP_HISTORY_COUNT 20
 
 #define PRIMARY_SD_GPIO GPIO_NUM_40
@@ -65,6 +66,8 @@ typedef struct
     bool sync_loss_detection_enable;
     bool sync_loss_detection_level;
     int intr_edge;
+    bool alignment;
+    int sync_level[SYNC_LEVEL_COUNT];
 } display_sync_info_t;
 
 
@@ -80,7 +83,10 @@ uint8_t* display_control_get_primary_overlay_buffer();
 uint8_t* display_control_get_secondary_overlay_buffer();
 void display_set_power_down(bool power_down);
 void display_control_get_formats(display_format_t *formats);
+void display_get_connectivity(bool *connectivity);
 void display_control_record_operate_time();
 void display_control_cancel_operate_time(int64_t cancel_duration);
 void display_control_operate_hang_request();
 void display_control_operate_hang_release();
+void display_invalidate_alignment();
+void display_wait_for_alignment();

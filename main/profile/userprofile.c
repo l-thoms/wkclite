@@ -33,27 +33,26 @@ static void userprofile_parse()
         userprofile_parse();
         return;
     }
-    cJSON *device_name = NULL, *owner = NULL, *character = NULL, *manufacturer = NULL;
+    cJSON *device_name = cJSON_GetObjectItem(profile_json, "device_name"),
+          *owner = cJSON_GetObjectItem(profile_json, "owner"),
+          *character = cJSON_GetObjectItem(profile_json, "character"),
+          *manufacturer = cJSON_GetObjectItem(profile_json, "manufacturer"),
+          *personal_signature = cJSON_GetObjectItem(profile_json, "personal_signature"),
+          *background_image_url = cJSON_GetObjectItem(profile_json, "background_image_url");
 
-    device_name = cJSON_GetObjectItem(profile_json, "device_name");
-    owner = cJSON_GetObjectItem(profile_json, "owner");
-    character = cJSON_GetObjectItem(profile_json, "character");
-    manufacturer = cJSON_GetObjectItem(profile_json, "manufacturer");
+    char *device_name_str = cJSON_GetStringValue(device_name),
+         *owner_str = cJSON_GetStringValue(owner),
+         *character_str = cJSON_GetStringValue(character),
+         *manufacturer_str = cJSON_GetStringValue(manufacturer),
+         *personal_signature_str = cJSON_GetStringValue(personal_signature),
+         *background_image_url_str = cJSON_GetStringValue(background_image_url);
 
-    char *device_name_str = cJSON_GetStringValue(device_name);
-    char *owner_str = cJSON_GetStringValue(owner);
-    char *character_str = cJSON_GetStringValue(character);
-    char *manufacturer_str = cJSON_GetStringValue(manufacturer);
-
-    current_profile.device_name = (char*)malloc(strlen(device_name_str) + 1);
-    current_profile.owner = (char*)malloc(strlen(owner_str) + 1);
-    current_profile.character = (char*)malloc(strlen(character_str) + 1);
-    current_profile.manufacturer = (char*)malloc(strlen(manufacturer_str) + 1);
-
-    strncpy(current_profile.device_name, device_name_str, strlen(device_name_str) + 1);
-    strncpy(current_profile.owner, owner_str, strlen(owner_str) + 1);
-    strncpy(current_profile.character, character_str, strlen(character_str) + 1);
-    strncpy(current_profile.manufacturer, manufacturer_str, strlen(manufacturer_str) + 1);
+    current_profile.device_name = device_name_str ? strdup(device_name_str) : NULL;
+    current_profile.owner = owner_str ? strdup(owner_str) : NULL;
+    current_profile.character = character_str ? strdup(character_str) : NULL;
+    current_profile.manufacturer = manufacturer_str ? strdup(manufacturer_str) : NULL;
+    current_profile.personal_signature = personal_signature_str ? strdup(personal_signature_str) : NULL;
+    current_profile.background_image_url = background_image_url_str ? strdup(background_image_url_str) : NULL;
 
     cJSON_Delete(profile_json);
 }
@@ -65,6 +64,8 @@ void wkc_userprofile_save()
     cJSON_AddStringToObject(profile_json, "owner", current_profile.owner);
     cJSON_AddStringToObject(profile_json, "character", current_profile.character);
     cJSON_AddStringToObject(profile_json, "manufacturer", current_profile.manufacturer);
+    cJSON_AddStringToObject(profile_json, "personal_signature", current_profile.personal_signature);
+    cJSON_AddStringToObject(profile_json, "background_image_url", current_profile.background_image_url);
     char *result = cJSON_Print(profile_json);
     cJSON_Delete(profile_json);
     wkc_save(USERPROFILE_PATH_ACTIVE, result, strlen(result) + 1);

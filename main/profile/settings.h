@@ -31,21 +31,24 @@ typedef struct
     bool keep_advertise;
     int power_save;
     int homepage_status_bar_position;
+    int chat_status;
+    int background_color;
+    int chat_passkey;
     display_settings_t display;
     peripheral_settings_t peripherals;
 } wkc_settings_t;
-
-extern uint8_t current_security_storage[10][16];
 
 int clamp(int value, int min, int max);
 void local_clamp(int *value, int min, int max);
 void wkc_settings_load_default();
 void wkc_security_load_default();
 wkc_settings_t *wkc_settings_get_current();
-char* wkc_settings_write();
 void wkc_settings_save();
-void wkc_security_save();
 void wkc_security_append_key(uint8_t *key);
+void wkc_chat_only_append_key(uint8_t *key);
 void wkc_settings_init();
 void wkc_security_init();
 int wkc_get_security_storage_length();
+int wkc_get_chat_only_storage_length();
+uint8_t *wkc_security_storage_get_current();
+uint8_t *wkc_chat_only_storage_get_current();

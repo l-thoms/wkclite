@@ -11,6 +11,7 @@
 #include "peripherals/battery_calibration.h"
 #include "io/io_extend.h"
 #include "protocol/ble.h"
+#include "protocol/command_parser.h"
 #include "camera.h"
 #include "files.h"
 
@@ -485,13 +486,13 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
                 {
                     ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                         "menu_peripherals_disable_calibrate"), 5);
-                    protocol_ble_notify_update_command("fan");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "fan");
                 }
                 else
                 {
                     pwm_device_toggle_fan();
                     menu->draw_request = true;
-                    protocol_ble_notify_update_command("fan");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "fan");
                 }
             }
             else if (menu->selected_index == 6)
@@ -500,13 +501,13 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
                 {
                     ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                         "menu_peripherals_disable_calibrate"), 5);
-                    protocol_ble_notify_update_command("eye");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "eye");
                 }
                 else
                 {
                     pwm_device_toggle_eye();
                     menu->draw_request = true;
-                    protocol_ble_notify_update_command("eye");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "eye");
                 }
             }
             else if(menu->selected_index == 7)
@@ -516,7 +517,7 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
                     ui_shell_show_toast(menu->base.parent, lock_result_to_char(lock_result), 5);
                 else
                     menu->draw_request = true;
-                protocol_ble_notify_update_command("lock");
+                protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "lock");
             }
         }
         break;
@@ -525,7 +526,7 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
     }
 }
 
-static void ui_menu_on_format_changed(ui_menu_t *menu)
+static void ui_menu_on_refresh(ui_menu_t *menu)
 {
     menu->last_selected_index= -1;
     menu->draw_request = true;
@@ -538,7 +539,7 @@ ui_page_t *ui_menu_create()
     menu->base.on_show = (ui_page_event_t)ui_menu_on_show;
     menu->base.on_draw = (ui_page_draw_event_t)ui_menu_on_draw;
     menu->base.on_key_event = (ui_page_key_event_t)ui_menu_on_key_event;
-    menu->base.on_format_changed = (ui_page_event_t)ui_menu_on_format_changed;
+    menu->base.on_refresh = (ui_page_event_t)ui_menu_on_refresh;
     menu->base.on_mainloop = NULL;
     menu->selected_index = 0;
     menu->last_selected_index = -1;

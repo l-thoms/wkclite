@@ -3,6 +3,7 @@
 #include <string.h>
 #include "esp_system.h"
 #include "protocol/ble.h"
+#include "protocol/command_parser.h"
 #include "display/graphics.h"
 #include "display/display_control.h"
 #include "ui_common.h"
@@ -931,7 +932,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     current_settings->display.orientation %= 3;
                     refresh = true;
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("screen_orientation");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "screen_orientation");
                 }
                 else if (*current_index == 1 &&
                         (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT))
@@ -944,7 +945,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     refresh = true;
                     display_settings_update();
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("output_mode");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "output_mode");
                 }
                 else if (*current_index == 2 && key_code == UI_KEY_CODE_OK)
                 {
@@ -962,7 +963,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     refresh = true;
                     display_settings_update();
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("capture_card_output");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_card_output");
                 }
                 else if (*current_index == 4 && key_code == UI_KEY_CODE_OK)
                 {
@@ -971,7 +972,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     refresh = true;
                     display_settings_update();
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("capture_with_osd");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_with_osd");
                 }
                 *current_index %= 5;
             }
@@ -1061,14 +1062,14 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     current_settings->power_save %= 4;
                     refresh = true;
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("power_save");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "power_save");
                 }
                 else if (*current_index == 1 && key_code == UI_KEY_CODE_OK)
                 {
                     current_settings->keep_advertise = !current_settings->keep_advertise;
                     refresh = true;
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("keep_advertise");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "keep_advertise");
                 }
                 else if (*current_index == 2 && key_code == UI_KEY_CODE_OK)
                 {
@@ -1076,7 +1077,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                     !current_settings->peripherals.remember_state;
                     refresh = true;
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("remember_peripherals");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "remember_peripherals");
                 }
                 else if (*current_index == 3 &&
                         (key_code == UI_KEY_CODE_LEFT) || key_code == UI_KEY_CODE_RIGHT)
@@ -1085,7 +1086,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
                         !current_settings->homepage_status_bar_position;
                     refresh = true;
                     wkc_settings_save();
-                    protocol_ble_notify_update_command("homepage_status_bar_position");
+                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "homepage_status_bar_position");
                 }
                 *current_index %= 4;
             }
@@ -1162,7 +1163,7 @@ static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
     }
 }
 
-static void ui_settings_on_format_changed(ui_settings_t *settings)
+static void ui_settings_on_refresh(ui_settings_t *settings)
 {
     settings->show = true;
     settings->draw_request = true;
@@ -1177,6 +1178,6 @@ ui_page_t *ui_settings_create()
     settings->base.on_draw = (ui_page_draw_event_t)ui_settings_on_draw;
     settings->base.on_key_event = (ui_page_key_event_t)ui_settings_on_key_event;
     settings->base.on_mainloop = NULL;
-    settings->base.on_format_changed = (ui_page_event_t)ui_settings_on_format_changed;
+    settings->base.on_refresh = (ui_page_event_t)ui_settings_on_refresh;
     return (ui_page_t*)settings;
 }

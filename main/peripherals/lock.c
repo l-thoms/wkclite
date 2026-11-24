@@ -10,6 +10,7 @@
 #include "profile/translations.h"
 #include "peripherals/battery_calibration.h"
 #include "protocol/ble.h"
+#include "protocol/command_parser.h"
 #include "display/display_control.h"
 
 static bool locked = false;
@@ -67,7 +68,7 @@ bool lock_check_power()
         bool locked_pre = locked;
         _lock_set_priv(false, true, false);
         if (locked_pre)
-            protocol_ble_notify_update_command("lock");
+            protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "lock");
         return false;
     }
     return true;

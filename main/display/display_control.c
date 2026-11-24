@@ -33,8 +33,8 @@
                                   (ets_get_cpu_frequency() * 2))
 #define CPU_CYCLE_TO_PIXEL_FLOAT(cycle) ((cycle) * 7.5 / ets_get_cpu_frequency())
 
-static i2s_chan_handle_t handle_primary;
-static i2s_chan_handle_t handle_secondary;
+static i2s_chan_handle_t handle_primary = NULL;
+static i2s_chan_handle_t handle_secondary = NULL;
 
 static display_sync_info_t primary_sync_info;
 static display_sync_info_t secondary_sync_info;
@@ -218,7 +218,7 @@ static bool IRAM_ATTR i2s_controller_tx_callback(i2s_chan_handle_t handle, i2s_e
 
 static void display_control_disable_secondary()
 {
-    if(handle_secondary != NULL)
+    if (handle_secondary)
     {
         i2s_channel_disable(handle_secondary);
         i2s_del_channel(handle_secondary);
@@ -257,7 +257,7 @@ static void display_control_set_secondary(display_format_t format)
 
 static void display_control_disable_primary()
 {
-    if(handle_primary != NULL)
+    if (handle_primary)
     {
         i2s_channel_disable(handle_primary);
         i2s_del_channel(handle_primary);
@@ -379,6 +379,7 @@ static void IRAM_ATTR vsync_isr(void *args)
         sync_info->transmission_cycle_count = cpu_cycle;
         sync_info->channel_reset = 3;
         sync_info->inertia_cnt = -1;
+        sync_info->alignment = true;
     }
     else
     {
@@ -409,28 +410,48 @@ void display_control_init_sync_info(display_sync_info_t *sync_info, uint8_t *fra
     sync_info->transmit_ticks = 0;
     sync_info->transmit_num = 0;
     sync_info->intr_edge = intr_edge;
+    sync_info->alignment = false;
+    for (int i = 0; i < SYNC_LEVEL_COUNT; i++) // Assumed both ports are connected
+        sync_info->sync_level[i] = i % 2;
 
     gpio_set_direction(vsync_gpio, GPIO_MODE_INPUT);
     gpio_set_intr_type(vsync_gpio, intr_edge);
     gpio_isr_handler_add(vsync_gpio, vsync_isr, sync_info);
 }
 
-static bool display_control_sync_lost_detection(display_sync_info_t *sync_info, gpio_num_t gpio,
-                                         const char *description)
+static bool display_is_connection_lost(display_sync_info_t *sync_info)
+{
+    bool and = 1, or = 0;
+    for (int i = 0; i < SYNC_LEVEL_COUNT; i++)
+    {
+        and = and && sync_info->sync_level[i];
+        or = or || sync_info->sync_level[i];
+    }
+    return and == or;
+}
+
+static bool display_control_sync_lost_detection(display_sync_info_t *sync_info,
+    gpio_num_t gpio, const char *description)
 {
     int64_t current_us = esp_timer_get_time();
+    int read = gpio_read(gpio);
+    // Shift the sample history; the array is SYNC_LEVEL_COUNT entries long
+    for (int i = SYNC_LEVEL_COUNT - 1; i > 0; i--)
+        sync_info->sync_level[i] = sync_info->sync_level[i - 1];
+    sync_info->sync_level[0] = read;
     if (current_us - sync_info->sync_time_us > 100000)
     {
         if(!sync_info->sync_loss_detection_enable)
         {
-            sync_info->sync_loss_detection_level = gpio_read(gpio);
+            sync_info->sync_loss_detection_level = read;
             sync_info->sync_loss_detection_enable = true;
         }
         else
         {
-            if(gpio_read(gpio) != sync_info->sync_loss_detection_level)
+            if(read != sync_info->sync_loss_detection_level)
             {
-                ESP_LOGW("DISPLAY_CONTROL", "%s vsync ISR lost", description);
+                if (description)
+                    ESP_LOGW("DISPLAY_CONTROL", "%s vsync ISR lost", description);
                 sync_info->sync_loss_detection_enable = false;
                 return true;
             }
@@ -606,7 +627,7 @@ void display_control_init()
     display_control_init_sync_info(&secondary_sync_info, secondary_frame_buffer,
                                    SECONDARY_VSYNC_GPIO, GPIO_INTR_NEGEDGE);
 
-    xTaskCreatePinnedToCore(display_control_polling_task, "display_control_polling_pask",
+    xTaskCreatePinnedToCore(display_control_polling_task, "display_control_polling_task",
                             4096, NULL, 10, NULL, 1);
 }
 
@@ -676,4 +697,27 @@ void display_control_operate_hang_release()
         operate_hang_count--;
     display_control_record_operate_time();
     xSemaphoreGive(operate_hang_semaphore);
+}
+
+void display_invalidate_alignment()
+{
+    primary_sync_info.alignment = false;
+    secondary_sync_info.alignment = false;
+}
+
+void display_get_connectivity(bool *connectivity)
+{
+    connectivity[0] = display_is_connection_lost(&primary_sync_info);
+    connectivity[1] = display_is_connection_lost(&secondary_sync_info);
+}
+
+void display_wait_for_alignment()
+{
+    while (!primary_sync_info.alignment &&
+           !display_is_connection_lost(&primary_sync_info) ||
+           !secondary_sync_info.alignment &&
+           !display_is_connection_lost(&secondary_sync_info))
+    {
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
 }

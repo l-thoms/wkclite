@@ -415,7 +415,7 @@ ui_page_t *ui_home_create()
     home->base.on_draw = (ui_page_draw_event_t)ui_home_on_draw;
     home->base.on_key_event = (ui_page_key_event_t)ui_home_on_key_event;
     home->base.on_mainloop = (ui_page_mainloop_event_t)ui_home_on_mainloop;
-    home->base.on_format_changed = (ui_page_event_t)ui_home_on_show;
+    home->base.on_refresh = (ui_page_event_t)ui_home_on_show;
     home->battery_query_request = true;
     home->status_query_request = true;
     home->time_query_request = true;
