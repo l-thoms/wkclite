@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_littlefs.h"
@@ -6,11 +9,32 @@
 #include "driver/sdmmc_host.h"
 #include <sys/dir.h>
 #include <sys/dirent.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "filesystem.h"
 
 #define TAG "WKC_FILESYSTEM"
 
+// Longest path this module is able to save (including the ".tmp" suffix)
+#define FILE_PATH_MAX 160
+
 sdmmc_card_t *sd_card = NULL;
+
+// Serializes the file writes: the UI, the ADC monitor and the BLE host all save
+// the same profile files, and two concurrent saves would truncate each other.
+static SemaphoreHandle_t file_write_mutex = NULL;
+
+static void file_write_lock()
+{
+    if (file_write_mutex != NULL)
+        xSemaphoreTake(file_write_mutex, portMAX_DELAY);
+}
+
+static void file_write_unlock()
+{
+    if (file_write_mutex != NULL)
+        xSemaphoreGive(file_write_mutex);
+}
 
 esp_err_t wkc_storage_init_static()
 {
@@ -55,6 +79,8 @@ esp_err_t wkc_storage_init_fonts()
 esp_err_t wkc_storage_init_dynamic()
 {
     ESP_LOGI(TAG, "Init dynamic partition...");
+    if (file_write_mutex == NULL)
+        file_write_mutex = xSemaphoreCreateMutex();
     esp_vfs_littlefs_conf_t conf = {
         .base_path = "/data_dynamic",
         .partition_label = "data_dynamic",
@@ -147,18 +173,43 @@ int wkc_storage_ensure_capture_dir()
     }
 }
 
+// Reads up to `size` bytes into `buffer`; returns the number of bytes read, or
+// -1 when the file cannot be opened or read.
+int wkc_read(const char *path, char *buffer, size_t size)
+{
+    if (path == NULL || buffer == NULL)
+        return -1;
+    FILE *file = fopen(path, "rb");
+    if(file == NULL) return -1;
+
+    size_t total = 0;
+    while (total < size)
+    {
+        size_t read_bytes = fread(buffer + total, 1, size - total, file);
+        if (read_bytes == 0)
+            break;
+        total += read_bytes;
+    }
+    bool failed = ferror(file) != 0;
+    fclose(file);
+    return failed ? -1 : (int)total;
+}
+
 int wkc_copy(const char *src, const char *dst)
 {
-    FILE *file_src = fopen(src, "rb");
-    if(file_src == NULL) return 1;
-    FILE *file_dst = fopen(dst, "wb");
-    int ch;
-    while ((ch = fgetc(file_src)) != EOF)
-        fputc(ch, file_dst);
-
-    fclose(file_src);
-    fclose(file_dst);
-    return 0;
+    if (src == NULL || dst == NULL)
+        return 1;
+    size_t size = 0;
+    if (wkc_get_file_size(src, &size) != 0)
+        return 1;
+    char *buffer = malloc(size == 0 ? 1 : size);
+    if (buffer == NULL)
+        return 1;
+    int ret = wkc_read(src, buffer, size) < 0 ? 1 : 0;
+    if (ret == 0)
+        ret = wkc_save(dst, buffer, size);
+    free(buffer);
+    return ret;
 }
 
 int wkc_get_file_size(const char *path, size_t *size)
@@ -184,22 +235,54 @@ void wkc_size_to_char(size_t size, char *result)
 
 int wkc_open(const char *path, char *buffer, size_t size)
 {
-    FILE *file = fopen(path, "rb");
-    if(file == NULL) return 1;
-    fread(buffer, size, 1, file);
-    fclose(file);
-    return 0;
+    return wkc_read(path, buffer, size) < 0 ? 1 : 0;
 }
 
+// Writes through a temporary file and replaces the old one only after the new
+// content is completely on flash. A reset in the middle of a save can therefore
+// never leave a truncated file behind (the previous content survives instead).
 int wkc_save(const char *path, char *buffer, size_t size)
 {
-    FILE *file = fopen(path, "wb");
-    if(file == NULL)return 1;
-    fwrite(buffer, size, 1, file);
-    fclose(file);
+    if (path == NULL || (buffer == NULL && size > 0))
+        return 1;
+
+    char temp_path[FILE_PATH_MAX];
+    if (snprintf(temp_path, sizeof(temp_path), "%s.tmp", path) >= (int)sizeof(temp_path))
+        return 1;
+
+    file_write_lock();
+
+    FILE *file = fopen(temp_path, "wb");
+    if (file == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to create %s", temp_path);
+        file_write_unlock();
+        return 1;
+    }
+
+    size_t written = size > 0 ? fwrite(buffer, 1, size, file) : 0;
+    bool failed = written != size;
+    if (fflush(file) != 0) failed = true;
+    if (fclose(file) != 0) failed = true;
+    if (failed)
+    {
+        ESP_LOGE(TAG, "Failed to write %s", temp_path);
+        remove(temp_path);
+        file_write_unlock();
+        return 1;
+    }
+
+    if (rename(temp_path, path) != 0)
+    {
+        ESP_LOGE(TAG, "Failed to replace %s", path);
+        remove(temp_path);
+        file_write_unlock();
+        return 1;
+    }
+
+    file_write_unlock();
     return 0;
 }
-
 bool wkc_file_exist(const char *path)
 {
     FILE *file = fopen(path, "r");

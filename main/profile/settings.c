@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -8,10 +10,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#define TAG "WKC_SETTINGS"
+
 #define SETTINGS_PATH_DEFAULT "/data_static/profile/settings.json"
 #define SETTINGS_PATH_ACTIVE "/data_dynamic/profile/settings.json"
 #define SECURITY_PATH_ACTIVE "/data_dynamic/profile/security.bin"
 #define CHAT_ONLY_PATH_ACTIVE "/data_dynamic/profile/chat_only.bin"
+// Sanity limit for the settings file; anything larger is treated as corrupt
+#define SETTINGS_FILE_MAX 16384
 
 static wkc_settings_t current_settings = { 0 };
 SemaphoreHandle_t settings_semaphore = NULL;
@@ -38,27 +44,75 @@ wkc_settings_t *wkc_settings_get_current()
 
 void wkc_settings_load_default()
 {
-    wkc_copy(SETTINGS_PATH_DEFAULT, SETTINGS_PATH_ACTIVE);
+    if (wkc_copy(SETTINGS_PATH_DEFAULT, SETTINGS_PATH_ACTIVE) != 0)
+        ESP_LOGE(TAG, "Failed to copy the default settings");
 }
 
 void wkc_security_load_default()
 {
-    wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage, 0);
-    wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage, 0);
+    if (wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage, 0) != 0 ||
+        wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage, 0) != 0)
+        ESP_LOGE(TAG, "Failed to create the default security storage");
+}
+
+// Reads the whole settings file into a NUL terminated heap buffer
+static char *settings_read_file()
+{
+    size_t settings_size = 0;
+    if (wkc_get_file_size(SETTINGS_PATH_ACTIVE, &settings_size) != 0 ||
+        settings_size == 0 || settings_size > SETTINGS_FILE_MAX)
+        return NULL;
+
+    char *buffer = malloc(settings_size + 1);
+    if (buffer == NULL)
+        return NULL;
+
+    int read = wkc_read(SETTINGS_PATH_ACTIVE, buffer, settings_size);
+    if (read < 0)
+    {
+        free(buffer);
+        return NULL;
+    }
+    buffer[read] = '\0';
+    return buffer;
+}
+
+static cJSON *settings_read_json()
+{
+    char *buffer = settings_read_file();
+    if (buffer == NULL)
+        return NULL;
+    cJSON *settings_json = cJSON_Parse(buffer);
+    free(buffer);
+    return settings_json;
+}
+
+// Keeps the unreadable file for diagnostics, then restores the factory default
+static void settings_restore_default()
+{
+    char backup_path[64];
+    if (snprintf(backup_path, sizeof(backup_path), "%s.bad", SETTINGS_PATH_ACTIVE)
+        < (int)sizeof(backup_path))
+    {
+        remove(backup_path);
+        if (rename(SETTINGS_PATH_ACTIVE, backup_path) != 0)
+            ESP_LOGW(TAG, "Failed to keep the broken settings file");
+    }
+    wkc_settings_load_default();
 }
 
 static void settings_parse()
 {
-    size_t settings_size;
-    wkc_get_file_size(SETTINGS_PATH_ACTIVE, &settings_size);
-    char settings_buffer[settings_size];
-    wkc_open(SETTINGS_PATH_ACTIVE, settings_buffer, settings_size);
-
-    cJSON *settings_json = cJSON_Parse(settings_buffer);
-    if(settings_json == NULL)
+    cJSON *settings_json = settings_read_json();
+    if (settings_json == NULL)
     {
-        wkc_settings_load_default();
-        settings_parse();
+        ESP_LOGE(TAG, "Settings unreadable, restoring defaults");
+        settings_restore_default();
+        settings_json = settings_read_json();
+    }
+    if (settings_json == NULL)
+    {
+        ESP_LOGE(TAG, "Default settings unreadable, keeping built-in values");
         return;
     }
     current_settings = (wkc_settings_t) { 0 };
@@ -143,6 +197,12 @@ static void settings_parse()
 
     current_settings.chat_passkey = esp_random() % (int)1e06;
 
+    ESP_LOGI(TAG, "Settings loaded: language %d, power_save %d, remember %d, fan %d, eye %d, color %d",
+             current_settings.language, current_settings.power_save,
+             current_settings.peripherals.remember_state,
+             current_settings.peripherals.fan, current_settings.peripherals.eye,
+             current_settings.background_color);
+
     cJSON_Delete(settings_json);
 }
 
@@ -209,17 +269,25 @@ void wkc_settings_save()
 {
     xSemaphoreTake(settings_semaphore, portMAX_DELAY);
     char *result = settings_write();
-    wkc_save(SETTINGS_PATH_ACTIVE, result, strlen(result) + 1);
+    if (result == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to serialize the settings");
+        xSemaphoreGive(settings_semaphore);
+        return;
+    }
+    if (wkc_save(SETTINGS_PATH_ACTIVE, result, strlen(result) + 1) != 0)
+        ESP_LOGE(TAG, "Failed to save the settings");
     free(result);
     xSemaphoreGive(settings_semaphore);
 }
 
 static void wkc_security_save()
 {
-    wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage,
-             16 * current_security_storage_length);
-    wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage,
-             16 * current_chat_only_storage_length);
+    if (wkc_save(SECURITY_PATH_ACTIVE, (char*)current_security_storage,
+                 16 * current_security_storage_length) != 0 ||
+        wkc_save(CHAT_ONLY_PATH_ACTIVE, (char*)current_chat_only_storage,
+                 16 * current_chat_only_storage_length) != 0)
+        ESP_LOGE(TAG, "Failed to save the security storage");
 }
 
 static void append_key(uint8_t *key, uint8_t *storage, int *length, int max_length)
@@ -253,22 +321,20 @@ void wkc_settings_init()
         settings_semaphore = xSemaphoreCreateMutex();
     if(!wkc_file_exist(SETTINGS_PATH_ACTIVE))
     {
-        ESP_LOGW("WKC_SETTINGS", "Settings does not exist, create default");
+        ESP_LOGW(TAG, "Settings does not exist, create default");
         wkc_settings_load_default();
-        wkc_settings_init();
-        return;
     }
     settings_parse();
 }
 
 void wkc_security_init()
 {
+    if (settings_semaphore == NULL)
+        settings_semaphore = xSemaphoreCreateMutex();
     if(!wkc_file_exist(SECURITY_PATH_ACTIVE))
     {
-        ESP_LOGW("WKC_SETTINGS", "Security does not exist, create default");
+        ESP_LOGW(TAG, "Security does not exist, create default");
         wkc_security_load_default();
-        wkc_security_init();
-        return;
     }
     security_parse();
 }

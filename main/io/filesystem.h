@@ -13,6 +13,7 @@ esp_err_t wkc_storage_init_sdcard();
 int wkc_copy(const char *src, const char *dst);
 void wkc_size_to_char(size_t size, char *result);
 int wkc_get_file_size(const char *path, size_t *size);
+int wkc_read(const char *path, char *buffer, size_t size);
 int wkc_open(const char *path, char *buffer, size_t size);
 int wkc_save(const char *path, char *buffer, size_t size);
 bool wkc_file_exist(const char *path);

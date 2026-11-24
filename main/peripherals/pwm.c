@@ -183,7 +183,12 @@ void pwm_device_check_power()
 
 void pwm_device_load_from_settings()
 {
+    // Apply the stored levels without saving them back: the public setters would
+    // rewrite the settings file on every boot, which turns a fallback into the
+    // stored state and adds a write that a reset could land in the middle of
     wkc_settings_t *current_settings = wkc_settings_get_current();
-    pwm_device_set_eye_level(current_settings->peripherals.eye);
-    pwm_device_set_fan_level(current_settings->peripherals.fan);
+    eye_level = clamp(current_settings->peripherals.eye, 0, 3);
+    fan_level = clamp(current_settings->peripherals.fan, 0, 3);
+    pwm_device_set_eye_level_temp(eye_level);
+    pwm_device_set_fan_level_temp(fan_level);
 }
