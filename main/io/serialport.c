@@ -9,8 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "display/display_control.h"
-#include "peripherals/lock.h"
+#include "io/power_key.h"
 #include "ui/shell.h"
 #include "ui/ui_common.h"
 
@@ -29,30 +28,46 @@
 #define SERIALPORT_RELEASE_MS 200
 // Pseudo key code for the GPIO0 (power) key
 #define SERIALPORT_KEY_GPIO0 0x100
+// Three 'z' presses closer than this simulate one GPIO0 long press
+#define SERIALPORT_GPIO0_LONG_PRESSES 3
+#define SERIALPORT_GPIO0_INTERVAL_MS 500
 
-static void serialport_power_key()
+static int gpio0_presses = 0;
+static int64_t gpio0_last_time = 0;
+static bool gpio0_consumed = false;
+
+// Accumulates 'z' presses into a short or a long GPIO0 event
+static void serialport_gpio0_press(int64_t now)
 {
-    // Mirrors the GPIO0 handler in power_key.c, but never calls
-    // esp_sleep_enable_ext0_wakeup()/esp_light_sleep_start(): entering light
-    // sleep would suspend the serial console until the next key press.
-    if (display_get_power_save())
+    if (now - gpio0_last_time > SERIALPORT_GPIO0_INTERVAL_MS)
     {
-        display_reset_power_save();
-        ESP_LOGI(TAG, "Key GPIO0: wake display");
-        return;
+        gpio0_presses = 0;
+        gpio0_consumed = false;
     }
-    if (lock_get_state())
+    gpio0_last_time = now;
+    if (gpio0_consumed)
+        return;
+    gpio0_presses += 1;
+    if (gpio0_presses >= SERIALPORT_GPIO0_LONG_PRESSES)
     {
-        // lock_set_from_isr() only posts to the lock queue, so it is safe here
-        lock_set_from_isr(false, true, false);
-        ESP_LOGI(TAG, "Key GPIO0: unlock");
-        return;
+        // Three presses are one long press; further presses do not count
+        gpio0_consumed = true;
+        gpio0_presses = 0;
+        power_key_event(true);
     }
-    // Same as the real key: this only re-checks the power state, which locks
-    // the device when it is unplugged or the battery is low. The real key would
-    // then enter light sleep; that part is intentionally skipped.
-    lock_set_from_isr(false, false, true);
-    ESP_LOGI(TAG, "Key GPIO0: pressed (light sleep skipped)");
+}
+
+// Emits the short presses once the gesture has ended
+static void serialport_gpio0_poll(int64_t now)
+{
+    if (gpio0_presses == 0 || gpio0_consumed)
+        return;
+    if (now - gpio0_last_time <= SERIALPORT_GPIO0_INTERVAL_MS)
+        return;
+    int presses = gpio0_presses;
+    gpio0_presses = 0;
+    for (int i = 0; i < presses; i++)
+        power_key_event(false);
 }
 
 // Translates one received character into a key code, 0 when it is not a key
@@ -91,13 +106,6 @@ static int serialport_map_key(uint8_t c)
 
 static void serialport_inject(int key)
 {
-    if (key == SERIALPORT_KEY_GPIO0)
-    {
-        // The GPIO0 action logs itself
-        serialport_power_key();
-        return;
-    }
-
     ui_shell_t *shell = ui_shell_get_current();
     if (shell == NULL)
         return;
@@ -124,6 +132,12 @@ static void serialport_task(void *args)
                 continue;
 
             last_rx = now;
+            if (key == SERIALPORT_KEY_GPIO0)
+            {
+                // GPIO0 is simulated by a sequence of 'z' presses
+                serialport_gpio0_press(now);
+                continue;
+            }
             if (now - last_inject >= SERIALPORT_KEY_INTERVAL_MS)
             {
                 // Key just pressed (or the rate limit allows it): deliver now
@@ -150,6 +164,8 @@ static void serialport_task(void *args)
             pending = 0;
             last_inject = now;
         }
+
+        serialport_gpio0_poll(esp_timer_get_time() / 1000);
 
         vTaskDelay(pdMS_TO_TICKS(SERIALPORT_POLL_MS));
     }

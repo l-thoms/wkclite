@@ -1,8 +1,5 @@
 # WKC Lite (娃眼·青春版)
 
-> [!WARNING]
-> 通信协议已升级至 v0.2.0.0, 与旧版手机客户端不再兼容。请及时更新手机客户端 [WKCCommunicator](https://github.com/l-thoms/WKCCommunicator) 至最新版本。
-
 # ![WKCLite_Logo](./WKCLite.svg)
 
 [English](./README.md)
@@ -16,8 +13,11 @@
 * 基于 SAA7113/TW9910 的拍照功能
 * 基于 BLE 的通信协议
 
-## 视频介绍
-* [https://www.bilibili.com/video/BV1TD3Y6qEnB](https://www.bilibili.com/video/BV1TD3Y6qEnB)
+## 开发计划
+- [ ] 全面升级至 v0.3.0.0 协议 (设计中)
+- [ ] 支持 ECX334AF XGA 面板与数字摄像头
+- [ ] 基于 I2C 控制的磁锁
+- [ ] 可选温控 ADC 支持，可替换原有磁力检测
 
 ## 使用方法
 * 对于 ESP32-S3 的代码，使用 ESP-IDF 6.x 编译。
@@ -27,6 +27,7 @@
 * 摄像头建议使用 PAL 制式，清晰度更高；头显建议选择反交错及梳状滤波功能好一点的。
 * 头壳久戴可能会产生大量水汽，为保证电路稳定，建议做好防潮措施。**否则可能会出现包括但不限于以下状况**：如屏幕亮度突然变暗、翻转，时间信息无法保存等。若屏幕图像意外翻转，可尝试在亮度调节模式中连按多次菜单键手动翻转。
 * 考虑到手机端操作的便捷性，通信协议未使用 BLE 原生配对方法，详见 `main/protocol/`。
+* 功能键可用串口模拟，以方便在离线状态下调试及 Agent 自动化。
 
 ## 许可证
 Verilog 代码 `verilog/` 及资源生成代码 `resgen/` 采用 **MIT** 许可证，其余代码采用 **GNU GPL v3.0** 许可证。第三方组件保留原始许可。

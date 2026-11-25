@@ -23,6 +23,7 @@
 #include "ui/settings.h"
 #include "ui/files.h"
 #include "ui/camera.h"
+#include "ui/offline_menu.h"
 #include "peripherals/adc.h"
 #include "peripherals/pwm.h"
 #include "peripherals/lock.h"
@@ -102,12 +103,14 @@ void app_main(void)
     ui_page_t *settings = ui_settings_create();
     ui_page_t *files = ui_files_create();
     ui_page_t *camera = ui_camera_create();
+    ui_page_t *offline_menu = ui_offline_menu_create();
     ui_shell_add_page(shell, home);
     ui_shell_add_page(shell, menu);
     ui_shell_add_page(shell, device_info);
     ui_shell_add_page(shell, settings);
     ui_shell_add_page(shell, files);
     ui_shell_add_page(shell, camera);
+    ui_shell_add_page(shell, offline_menu);
     ui_shell_show_page(shell, home);
     power_key_set_shell(shell);
     lock_set_shell(shell);

@@ -16,3 +16,6 @@ void ui_shell_send_key(ui_shell_t *shell, int key_code);
 void ui_shell_acquire_interval(ui_shell_t *shell, int interval);
 void ui_shell_set_wakeup(ui_shell_t *shell);
 ui_shell_t *ui_shell_get_current();
+ui_page_t *ui_shell_get_popup(ui_shell_t *shell);
+void ui_shell_close_popup(ui_shell_t *shell);
+void ui_shell_show_popup(ui_shell_t *shell, ui_page_t *page);

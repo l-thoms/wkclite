@@ -75,6 +75,11 @@
         "zh_cn": "电量校准期间禁止使用外设",
         "zh_tw": "電量校正期間禁止使用周邊設備"
     },
+    "menu_standby_disable_calibrate": {
+        "en_us": "Standby is prohibited during battery calibration",
+        "zh_cn": "电量校准期间禁止待机",
+        "zh_tw": "電量校正期間禁止待機"
+    },
     "menu_unlocked": {
         "en_us": "Unlocked",
         "zh_cn": "未锁定",
@@ -89,6 +94,16 @@
         "en_us": "Please check your battery",
         "zh_cn": "请确保电量充足再上锁",
         "zh_tw": "請確保電量充足再上鎖"
+    },
+    "menu_standby": {
+        "en_us": "Standby",
+        "zh_cn": "待机",
+        "zh_tw": "待機"
+    },
+    "menu_disconnect_device": {
+        "en_us": "Disconnect",
+        "zh_cn": "断开连接",
+        "zh_tw": "斷開連接"
     },
     "device_info_title": {
         "en_us": "Device Information",
@@ -419,6 +434,11 @@
         "en_us": "Chat Status",
         "zh_cn": "对话状态",
         "zh_tw": "對話狀態"
+    },
+    "settings_chat_code": {
+        "en_us": "Chat Code",
+        "zh_cn": "对话码",
+        "zh_tw": "對話碼"
     },
     "settings_chat_status_open": {
         "en_us": "Open Access",

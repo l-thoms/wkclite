@@ -483,11 +483,8 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
             else if (menu->selected_index == 5)
             {
                 if (battery_calibration_is_calibrating())
-                {
                     ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                         "menu_peripherals_disable_calibrate"), 5);
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "fan");
-                }
                 else
                 {
                     pwm_device_toggle_fan();
@@ -498,11 +495,8 @@ static void ui_menu_on_key_event(ui_menu_t *menu, int key_code)
             else if (menu->selected_index == 6)
             {
                 if (battery_calibration_is_calibrating())
-                {
                     ui_shell_show_toast(ui_shell_get_current(), wkc_translations_get_string(
                         "menu_peripherals_disable_calibrate"), 5);
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SHORTCUT, "eye");
-                }
                 else
                 {
                     pwm_device_toggle_eye();

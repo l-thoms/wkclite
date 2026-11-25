@@ -134,6 +134,7 @@ int protocol_shortcut_get_table(char *key, bool is_item)
 static void shortcut_check_menu_home()
 {
     ui_shell_t *shell = ui_shell_get_current();
+    ui_shell_close_popup(shell);
     ui_page_t *page = ui_shell_get_current_page(shell);
     if (page->type == UI_PAGE_TYPE_MENU)
     {

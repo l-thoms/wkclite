@@ -27,6 +27,8 @@
 #include "security.h"
 #include "profile/translations.h"
 
+static void stop_advertise();
+
 #define DEVICE_MODEL "WKC Lite"
 
 #define GATT_SVC_UUID 0xA000
@@ -430,6 +432,10 @@ static int gatt_svr_security_access(uint16_t conn_handle, uint16_t attr_handle,
                 ui_home_update_from_shell(current_shell);
                 current_handle = conn_handle;
                 ESP_LOGI("WKC_BLE", "Device verify okay");
+                // Only a fully verified client may interrupt advertising; the setting keeps it
+                // running for other devices
+                if (!wkc_settings_get_current()->keep_advertise)
+                    stop_advertise();
                 rc = (int)WKC_NOTIFY_SUCCESSED;
             }
             else
@@ -944,6 +950,24 @@ static int set_adv_fields()
 }
 
 
+// Stops advertising. Two extended advertising sets are used: instance 0 is the
+// connectable set, instance 1 carries the complete manufacturer data, so both
+// have to be stopped. ble_gap_adv_stop() only covers legacy advertising and
+// fails here (the controller reports an error instead of stopping the sets).
+static void stop_advertise()
+{
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        if (!ble_gap_ext_adv_active(i))
+            continue;
+        int rc = ble_gap_ext_adv_stop(i);
+        if (rc != 0)
+            ESP_LOGE("WKC_BLE", "ext_adv stop %d failed, reason: %d", i, rc);
+    }
+    ESP_LOGI("WKC_BLE", "Stop advertise.");
+    ui_home_update_from_shell(current_shell);
+}
+
 static void advertise()
 {
     wkc_userprofile_acquire_semaphore();
@@ -985,10 +1009,9 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
     {
         case BLE_GAP_EVENT_CONNECT:
             temporary_device_append(event->connect.conn_handle);
-            if(wkc_settings_get_current()->keep_advertise)
-                advertise();
-            else
-                ui_home_update_from_shell(current_shell);
+            ESP_LOGI("WKC_BLE", "Device connected, conn_handle: %d, status: %d",
+                     event->connect.conn_handle, event->connect.status);
+            advertise();
             break;
         case BLE_GAP_EVENT_DISCONNECT:
             temporary_device_remove(event->disconnect.conn.conn_handle);
@@ -1003,19 +1026,13 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg)
                     current_shell, UI_PAGE_TYPE_HOME));
                 ESP_LOGI("WKC_BLE", "Active device disconnected");
                 protocol_ble_reset_client_version();
+                advertise();
             }
             // Restart advertise
-            advertise();
             ui_home_update_from_shell(current_shell);
             break;
         case BLE_GAP_EVENT_ADV_COMPLETE:
             ui_home_update_from_shell(current_shell);
-            break;
-        case BLE_GAP_EVENT_PARING_COMPLETE:
-            // Prevent advertise stops when executing native pairing (unused)
-            if (current_handle == BLE_HS_CONN_HANDLE_NONE ||
-                wkc_settings_get_current()->keep_advertise)
-                advertise();
             break;
         default:
             break;
@@ -1107,6 +1124,13 @@ uint16_t protocol_ble_get_current_handle()
 bool protocol_ble_is_device_connected()
 {
     return current_handle != BLE_HS_CONN_HANDLE_NONE;
+}
+
+// Disconnects the active control client (chat-only connections are untouched)
+void protocol_ble_disconnect_current()
+{
+    if (current_handle != BLE_HS_CONN_HANDLE_NONE)
+        ble_gap_terminate(current_handle, 0x13);
 }
 
 static const struct ble_gatt_svc_def gatt_svr_svcs[] = {

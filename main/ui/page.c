@@ -23,7 +23,6 @@ void ui_page_on_show(ui_page_t *page)
 void ui_page_on_draw(ui_page_t *page, display_format_t *formats, display_orientation_t orientation)
 {
     if (page == NULL) return;
-    if (ui_shell_get_current_page(page->parent) != page) return;
     if (page->on_draw != NULL)
         page->on_draw(page, formats, orientation);
 }

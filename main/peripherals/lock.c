@@ -2,6 +2,7 @@
 #include "freertos/semphr.h"
 #include <stdbool.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "io/io_extend.h"
 #include "adc.h"
 #include "ui/shell.h"
@@ -12,6 +13,9 @@
 #include "protocol/ble.h"
 #include "protocol/command_parser.h"
 #include "display/display_control.h"
+
+// Upper bound for waiting until the lock motor reports idle
+#define LOCK_BUSY_TIMEOUT_US 3000000
 
 static bool locked = false;
 static SemaphoreHandle_t lock_semaphore = NULL;
@@ -39,9 +43,15 @@ static int _lock_set_priv(bool state, bool force, bool first_lock)
     int ret;
     xSemaphoreTake(lock_semaphore, portMAX_DELAY);
     bool busy;
+    // Wait for the motor, but never block forever: a jammed mechanism keeps the
+    // busy flag set and would otherwise deadlock the lock semaphore
+    int64_t busy_start = esp_timer_get_time();
     do
     {
         busy = lock_is_busy();
+        if (busy && force && esp_timer_get_time() - busy_start > LOCK_BUSY_TIMEOUT_US)
+            break;
+        if (busy && force) vTaskDelay(pdMS_TO_TICKS(5));
     } while (force && busy);
     if (!busy)
     {

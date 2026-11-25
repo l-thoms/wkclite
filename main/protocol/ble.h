@@ -10,6 +10,7 @@ void protocol_ble_init(ui_shell_t *shell);
 int protocol_ble_get_pairing_code();
 uint16_t protocol_ble_get_current_handle();
 bool protocol_ble_is_device_connected();
+void protocol_ble_disconnect_current();
 uint8_t *protocol_ble_get_version();
 uint8_t *protocol_ble_get_client_version();
 void protocol_ble_notify_update_command(wkc_category_t category, const char *name);

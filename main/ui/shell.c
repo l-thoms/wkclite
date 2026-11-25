@@ -44,6 +44,9 @@ typedef struct ui_shell_t
     ui_toast_t toast;
     ui_page_t *current_page;
     ui_page_t *page_backlog;
+    // popup backlog=null -> close popup
+    ui_page_t *current_popup;
+    ui_page_t *popup_backlog;
     ui_page_t **page_storage;
     int key_backlog;
     display_format_t formats[2];
@@ -254,17 +257,37 @@ void ui_shell_show_toast(ui_shell_t *shell, char *message, int duration)
     if (result != pdTRUE && msg_copy) free(msg_copy);
 }
 
-void ui_shell_show_page(ui_shell_t *shell, ui_page_t *page)
+static void show_backlog(ui_shell_t *shell, ui_page_t *page, ui_page_t **backlog)
 {
     for(int i = 0; i < MAX_PAGE_STORAGE_COUNT; i++)
         if (shell->page_storage[i] == page)
         {
-            shell->page_backlog = page;
+            *backlog = page;
             xQueueSendToBack(shell->queue, &(ui_shell_queue_info_t) {
                 .event_type = QUEUE_EVENT_UPDATE
             }, configTICK_RATE_HZ);
             return;
         }
+}
+
+void ui_shell_close_popup(ui_shell_t *shell)
+{
+    shell->popup_backlog = NULL;
+    xQueueSendToBack(shell->queue, &(ui_shell_queue_info_t){
+        .event_type = QUEUE_EVENT_UPDATE
+    }, configTICK_RATE_HZ);
+}
+
+void ui_shell_show_page(ui_shell_t *shell, ui_page_t *page)
+{
+    ui_shell_close_popup(shell);
+    show_backlog(shell, page, &shell->page_backlog);
+}
+
+void ui_shell_show_popup(ui_shell_t *shell, ui_page_t *page)
+{
+    if (page != shell->current_page && page != shell->page_backlog)
+        show_backlog(shell, page, &shell->popup_backlog);
 }
 
 void ui_shell_refresh(ui_shell_t *shell)
@@ -291,8 +314,10 @@ void ui_shell_add_page(ui_shell_t *shell, ui_page_t *page)
 
 ui_page_t *ui_shell_find_page(ui_shell_t *shell, ui_page_type_t type)
 {
+    if (shell == NULL) return NULL;
     for(int i = 0; i < MAX_PAGE_STORAGE_COUNT; i++)
-        if (shell->page_storage[i]->type == type) return shell->page_storage[i];
+        if (shell->page_storage[i] != NULL && shell->page_storage[i]->type == type)
+            return shell->page_storage[i];
     return NULL;
 }
 
@@ -358,22 +383,36 @@ void ui_shell_mainloop(ui_shell_t *shell)
                     ui_page_on_show(shell->current_page);
                 }
             }
+            bool popup_changed = shell->popup_backlog != shell->current_popup;
+            bool popup_show = shell->popup_backlog != NULL && shell->current_popup == NULL;
+            shell->current_popup = shell->popup_backlog;
+
+            if (popup_changed)
+            {
+                if (shell->current_popup != NULL)
+                    ui_page_on_show(shell->current_popup);
+            }
+
             ui_page_t *current = shell->current_page;
+            ui_page_t *current_popup = shell->current_popup;
+            ui_page_t *current_active = current_popup == NULL ? current : current_popup;
+
             if (current != NULL && shell->wakeup)
             {
                 ui_page_on_wakeup(current);
                 shell->wakeup = false;
             }
-            if (current != NULL && shell->key_backlog != -1)
+            if (current_active != NULL && shell->key_backlog != -1)
             {
-                ui_page_on_key_event(current,shell->key_backlog);
+                ui_page_on_key_event(current_active,shell->key_backlog);
                 shell->key_backlog = -1;
             }
             for (int i = 0; i < MAX_PAGE_STORAGE_COUNT; i++)
             {
                 if (shell->page_storage[i] == NULL) continue;
                 ui_page_on_mainloop(shell->page_storage[i],
-                    shell->page_storage[i] == current);
+                    shell->page_storage[i] == current ||
+                    shell->page_storage[i] == current_active);
             }
             if (current != NULL)
             {
@@ -387,10 +426,11 @@ void ui_shell_mainloop(ui_shell_t *shell)
                                              sizeof(shell->formats));
                 bool connectivity_changed = memcmp(shell->connectivity, connectivity,
                                                    sizeof(shell->connectivity));
+                bool force_refresh = false;
                 if (format_changed ||
                     shell->orientation != new_orientation ||
                     queue_info.event_type == QUEUE_EVENT_REFRESH ||
-                    connectivity_changed)
+                    connectivity_changed || popup_changed)
                 {
                     if (format_changed || connectivity_changed)
                     {
@@ -398,7 +438,13 @@ void ui_shell_mainloop(ui_shell_t *shell)
                         display_wait_for_alignment();
                     }
                     ui_shell_close_toast(shell);
-                    ui_page_on_refresh(current);
+                    if (!popup_show)
+                    {
+                        ui_page_on_refresh(current);
+                        force_refresh = true;
+                    }
+                    if (current_popup != NULL && !popup_show)
+                        ui_page_on_refresh(current_popup);
                     memcpy(shell->formats, formats, sizeof(shell->formats));
                     memcpy(shell->connectivity, connectivity, sizeof(shell->connectivity));
                     shell->orientation = new_orientation;
@@ -406,7 +452,12 @@ void ui_shell_mainloop(ui_shell_t *shell)
 
                 display_format_t draw_formats[2];
                 memcpy(draw_formats, shell->formats, sizeof(draw_formats));
-                ui_page_on_draw(current, draw_formats, shell->orientation);
+                // Pause draw events when popup shows
+                if (force_refresh || current_popup == NULL)
+                    ui_page_on_draw(current, draw_formats, shell->orientation);
+                if (current_popup != NULL)
+                    ui_page_on_draw(current_popup, draw_formats, shell->orientation);
+
             }
             if (queue_info.event_type == QUEUE_EVENT_TOAST)
                 ui_shell_sync_toast(shell, queue_info.msg, queue_info.num);
@@ -418,4 +469,9 @@ void ui_shell_mainloop(ui_shell_t *shell)
 ui_shell_t *ui_shell_get_current()
 {
     return current_shell;
+}
+
+ui_page_t *ui_shell_get_popup(ui_shell_t *shell)
+{
+    return shell == NULL ? NULL : shell->current_popup;
 }

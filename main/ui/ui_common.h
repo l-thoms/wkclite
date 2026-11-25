@@ -11,6 +11,9 @@
 #define UI_KEY_CODE_OK 5
 #define UI_KEY_CODE_MENU 6
 #define UI_KEY_CODE_EXIT 7
+// GPIO0 events (injected by the power key task and by the serial port)
+#define UI_KEY_CODE_GPIO0_SHORT 8
+#define UI_KEY_CODE_GPIO0_LONG 9
 
 typedef enum
 {
@@ -20,6 +23,7 @@ typedef enum
     UI_PAGE_TYPE_SETTINGS,
     UI_PAGE_TYPE_CAMERA,
     UI_PAGE_TYPE_FILES,
+    UI_PAGE_TYPE_OFFLINE_MENU,
 } ui_page_type_t;
 
 typedef struct ui_shell_t ui_shell_t;

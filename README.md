@@ -1,8 +1,5 @@
 # WKC Lite (Walking Kiger Camera Lite)
 
-> [!WARNING]
-> The communication protocol has been upgraded to v0.2.0.0 and is no longer compatible with the old mobile app. Please update the app [WKCCommunicator](https://github.com/l-thoms/WKCCommunicator) to the latest version.
-
 # ![WKCLite_Logo](./WKCLite.svg)
 
 [简体中文](./README_CN.md)
@@ -16,8 +13,11 @@ An analog binocular kigurumi vision enhancemnent project based on ESP32-S3 modul
 * SAA7113/TW9910-based Camera capture
 * BLE-Based communication protocol
 
-## Video Introduction (Chinese)
-* [https://www.bilibili.com/video/BV1TD3Y6qEnB](https://www.bilibili.com/video/BV1TD3Y6qEnB)
+## Todo
+- [ ] Full support for v0.3.0.0 protocol (drafting)
+- [ ] Add support for ECX334AF XGA panel and digital camera
+- [ ] I2C-controlled EM lock
+- [ ] Optional temperature control ADC support by replacing magnetic detection
 
 ## Usage
 * For ESP32-S3 code, build with ESP-IDF 6.x.
@@ -27,6 +27,7 @@ An analog binocular kigurumi vision enhancemnent project based on ESP32-S3 modul
 * It's recommended to use PAL format camera because of the higher resolution. For the headset, it's better to choose one with a good deinterlacing and comb filter feature.
 * It's recommended to take some anti-moisture precautions to keep the circuitry stable. **Otherwise, you might run into situations including, but not limited to,** things like the screen suddenly dimming, flipping, or the time information not being saved. If the screen image flips unexpectedly, you can try pressing the menu button multiple times in brightness adjustment mode to manually flip it back.
 * Communication protocol does not use BLE native pairing method for the convenience of mobile phone operation. See `main/protocol`.
+* Functional keys and can be simulated by serial port, which is significant for offline debugging and agents automation.
 
 ## License
 Verilog code `verilog/` and resource generator `resgen/` are under **MIT license**, the rest of code is under **GNU GPL v3.0**. Third-party components retain their respactive licenses.
