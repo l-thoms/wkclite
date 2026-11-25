@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_system.h"
+#include "esp_random.h"
 #include "protocol/ble.h"
 #include "protocol/command_parser.h"
 #include "display/graphics.h"
@@ -15,42 +16,448 @@
 #include "profile/userprofile.h"
 #include "peripherals/battery_calibration.h"
 
+#define UI_SETTINGS_MENU_MAX_DEPTH 8
+
 typedef enum
 {
-    UI_SETTINGS_MAIN,
-    UI_SETTINGS_DISPLAY,
-    UI_SETTINGS_DISPLAY_POSITION,
-    UI_SETTINGS_MISC,
-    UI_SETTINGS_ADVANCED,
-    UI_SETTINGS_ADVANCED_CONFIRM
-} ui_settings_menu_state_t;
-
-// For render only, events are implemented in key_event
+    UI_SETTINGS_SPECIAL_NONE,
+    UI_SETTINGS_SPECIAL_POSITION,
+    UI_SETTINGS_SPECIAL_CONFIRM
+} ui_settings_special_t;
 
 typedef struct
 {
     ui_page_t base;
     bool show;
     bool draw_request;
-    ui_settings_menu_state_t menu_state;
-    int selected_index[10];
+    // Menu stack, the top most menu is the one currently shown
+    ui_menu_item_t *current_menu[UI_SETTINGS_MENU_MAX_DEPTH];
+    int selected_index[UI_SETTINGS_MENU_MAX_DEPTH];
     int last_selected_index;
-    int hirerachy_index;
+    // Full screen modes that are not list menus
+    ui_settings_special_t special;
+    int special_index;
+    // Which entry opened the confirmation dialog (1 devices, 2 factory reset)
+    int confirm_target;
+    // Tiled output: the first screen shows the parent menu. It only has to be
+    // repainted after an orientation/format change, not when a sub menu is
+    // opened from an intact parent screen.
+    bool parent_needs_repaint;
 } ui_settings_t;
 
+static ui_menu_item_t *ui_settings_build_main_menu();
+static ui_menu_item_t *ui_settings_build_display_menu();
+static ui_menu_item_t *ui_settings_build_misc_menu();
+static ui_menu_item_t *ui_settings_build_advanced_menu();
 
-static void ui_settings_on_show(ui_settings_t *settings)
+#pragma region menu stack
+
+static void ui_settings_menu_set_options(ui_menu_item_t *item, char **options, int count)
 {
-    settings->show = true;
-    settings->draw_request = true;
-    settings->hirerachy_index = 0;
-    settings->last_selected_index = 0;
-    settings->selected_index[0] = 0;
-    settings->menu_state = UI_SETTINGS_MAIN;
+    item->count = count;
+    if (count <= 0)
+    {
+        item->options = NULL;
+        return;
+    }
+    item->options = calloc(count, sizeof(char*));
+    for (int i = 0; i < count; i++)
+        item->options[i] = strdup(options[i]);
 }
 
+static int ui_settings_get_menu_count(ui_settings_t *settings)
+{
+    int count = 0;
+    while (count < UI_SETTINGS_MENU_MAX_DEPTH && settings->current_menu[count] != NULL)
+        count += 1;
+    return count;
+}
+
+static void ui_settings_menu_free(ui_menu_item_t *menu)
+{
+    if (menu == NULL) return;
+    int index = 0;
+    while (menu[index].type != UI_MENU_ITEM_END)
+    {
+        if (menu[index].options != NULL)
+        {
+            for (int i = 0; i < menu[index].count; i++)
+                if (menu[index].options[i] != NULL) free(menu[index].options[i]);
+            free(menu[index].options);
+        }
+        index += 1;
+    }
+    free(menu);
+}
+
+static void ui_settings_menu_push(ui_settings_t *settings, ui_menu_item_t *menu)
+{
+    if (menu == NULL) return;
+    int count = ui_settings_get_menu_count(settings);
+    if (count >= UI_SETTINGS_MENU_MAX_DEPTH)
+    {
+        ui_settings_menu_free(menu);
+        return;
+    }
+    settings->current_menu[count] = menu;
+    settings->selected_index[count] = 0;
+    settings->last_selected_index = -1;
+    settings->parent_needs_repaint = false;
+    settings->show = true;
+    settings->draw_request = true;
+}
+
+static bool ui_settings_menu_pop(ui_settings_t *settings)
+{
+    int count = ui_settings_get_menu_count(settings);
+    if (count <= 0) return false;
+    ui_settings_menu_free(settings->current_menu[count - 1]);
+    settings->current_menu[count - 1] = NULL;
+    settings->last_selected_index = -1;
+    settings->parent_needs_repaint = true;
+    settings->show = true;
+    settings->draw_request = true;
+    return count > 1;
+}
+
+static void ui_settings_menu_free_all(ui_settings_t *settings)
+{
+    int count = ui_settings_get_menu_count(settings);
+    while (count > 0)
+    {
+        ui_settings_menu_free(settings->current_menu[count - 1]);
+        settings->current_menu[count - 1] = NULL;
+        count -= 1;
+    }
+}
+
+#pragma endregion
+
+#pragma region menu actions
+
+// Opens a sub menu, mirroring the camera's sub menu entries
+static void ui_settings_open_display_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    ui_settings_menu_push((ui_settings_t*)page, ui_settings_build_display_menu());
+}
+
+static void ui_settings_open_misc_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    ui_settings_menu_push((ui_settings_t*)page, ui_settings_build_misc_menu());
+}
+
+static void ui_settings_open_advanced_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    ui_settings_menu_push((ui_settings_t*)page, ui_settings_build_advanced_menu());
+}
+
+static void ui_settings_language_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->language = item->current_value;
+    wkc_settings_save();
+    // Every label comes from the loaded translations, so refresh the whole UI
+    ui_shell_refresh(ui_shell_get_current());
+}
+
+static void ui_settings_orientation_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->display.orientation = item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "screen_orientation");
+}
+
+static void ui_settings_output_mode_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->display.output_mode = item->current_value;
+    display_settings_update();
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "output_mode");
+}
+
+static void ui_settings_adjust_position_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    ui_settings_t *settings = (ui_settings_t*)page;
+    settings->special = UI_SETTINGS_SPECIAL_POSITION;
+    settings->special_index = 0;
+    settings->draw_request = true;
+    settings->show = true;
+}
+
+static void ui_settings_capture_index_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->display.capture_index = item->current_value;
+    display_settings_update();
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_card_output");
+}
+
+static void ui_settings_capture_osd_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->display.capture_osd = item->current_value;
+    display_settings_update();
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_with_osd");
+}
+
+static void ui_settings_power_save_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->power_save = item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "power_save");
+}
+
+static void ui_settings_keep_advertise_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->keep_advertise = item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "keep_advertise");
+}
+
+static void ui_settings_remember_peripherals_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->peripherals.remember_state = item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "remember_peripherals");
+}
+
+static void ui_settings_status_bar_position_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->homepage_status_bar_position = item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS,
+        "homepage_status_bar_position");
+}
+
+// Chat state is part of the misc settings table reported to the client
+static void ui_settings_chat_status_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_get_current()->chat_status = (wkc_chat_status_t)item->current_value;
+    wkc_settings_save();
+    protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, "misc_settings");
+}
+
+// The chat passkey has no values to cycle through: left/right regenerate it
+static void ui_settings_chat_passkey_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    wkc_settings_t *settings = wkc_settings_get_current();
+    settings->chat_passkey = esp_random() % (int)1e06;
+    if (item->options != NULL && item->count > 0)
+    {
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "%06d", settings->chat_passkey);
+        free(item->options[0]);
+        item->options[0] = strdup(buffer);
+    }
+    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "chat_passkey");
+}
+
+static void ui_settings_calibration_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    battery_calibration_set(!battery_calibration_is_calibrating());
+    item->current_value = battery_calibration_is_calibrating();
+}
+
+static void ui_settings_reset_confirm_action(ui_menu_item_t *item, ui_page_t *page)
+{
+    ui_settings_t *settings = (ui_settings_t*)page;
+    int count = ui_settings_get_menu_count(settings);
+    int selected = count > 0 ? settings->selected_index[count - 1] : 0;
+    settings->confirm_target = selected == 1 ? 1 : 2;
+    settings->special = UI_SETTINGS_SPECIAL_CONFIRM;
+    settings->special_index = 0;
+    // Only the dialog is drawn: the menu below it is still intact. A full
+    // repaint is only requested by ui_settings_on_refresh (phone side change,
+    // orientation change).
+    settings->draw_request = true;
+}
+
+#pragma endregion
+
+#pragma region menu builders
+
+static ui_menu_item_t *ui_settings_build_main_menu()
+{
+    ui_menu_item_t *menu = calloc(5, sizeof(ui_menu_item_t));
+    menu[0] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_display_settings"),
+        .action = ui_settings_open_display_action
+    };
+    menu[1] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_misc_settings"),
+        .action = ui_settings_open_misc_action
+    };
+    menu[2] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_advanced_settings"),
+        .action = ui_settings_open_advanced_action
+    };
+    int language_count = wkc_translations_get_languages_count();
+    char **language_options = calloc(language_count, sizeof(char*));
+    for (int i = 0; i < language_count; i++)
+        language_options[i] = wkc_translations_get_language_name_from_index(i);
+    menu[3] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_language"),
+        .current_value = wkc_settings_get_current()->language,
+        .action = ui_settings_language_action
+    };
+    ui_settings_menu_set_options(&menu[3], language_options, language_count);
+    free(language_options);
+    menu[4] = (ui_menu_item_t) { .type = UI_MENU_ITEM_END };
+    return menu;
+}
+
+static ui_menu_item_t *ui_settings_build_display_menu()
+{
+    char *orientation_options[] = {
+        wkc_translations_get_string("settings_horizontal"),
+        wkc_translations_get_string("settings_vertical"),
+        wkc_translations_get_string("settings_vertical_tiled")
+    };
+    char *output_mode_options[] = {
+        wkc_translations_get_string("settings_rising_edge"),
+        wkc_translations_get_string("settings_falling_edge"),
+        wkc_translations_get_string("settings_debug_mode")
+    };
+    char *capture_index_options[] = {
+        wkc_translations_get_string("settings_screen_id_1"),
+        wkc_translations_get_string("settings_screen_id_2"),
+    };
+    ui_menu_item_t *menu = calloc(6, sizeof(ui_menu_item_t));
+    menu[0] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_screen_orientation"),
+        .current_value = wkc_settings_get_current()->display.orientation,
+        .action = ui_settings_orientation_action
+    };
+    ui_settings_menu_set_options(&menu[0], orientation_options, 3);
+    menu[1] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_output_mode"),
+        .current_value = wkc_settings_get_current()->display.output_mode,
+        .action = ui_settings_output_mode_action
+    };
+    ui_settings_menu_set_options(&menu[1], output_mode_options, 3);
+    menu[2] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_adjust_position"),
+        .action = ui_settings_adjust_position_action
+    };
+    menu[3] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_capture_output"),
+        .current_value = wkc_settings_get_current()->display.capture_index,
+        .action = ui_settings_capture_index_action
+    };
+    ui_settings_menu_set_options(&menu[3], capture_index_options, 2);
+    menu[4] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_SWITCH,
+        .name = wkc_translations_get_string("settings_capture_osd"),
+        .current_value = wkc_settings_get_current()->display.capture_osd,
+        .action = ui_settings_capture_osd_action
+    };
+    menu[5] = (ui_menu_item_t) { .type = UI_MENU_ITEM_END };
+    return menu;
+}
+
+static ui_menu_item_t *ui_settings_build_misc_menu()
+{
+    char *power_save_options[] = {
+        wkc_translations_get_string("settings_never"),
+        wkc_translations_get_string("settings_1min"),
+        wkc_translations_get_string("settings_5min"),
+        wkc_translations_get_string("settings_10min"),
+    };
+    char *status_bar_position_options[] = {
+        wkc_translations_get_string("settings_top"),
+        wkc_translations_get_string("settings_bottom")
+    };
+    char *chat_status_options[] = {
+        wkc_translations_get_string("settings_chat_status_disabled"),
+        wkc_translations_get_string("settings_chat_status_limited"),
+        wkc_translations_get_string("settings_chat_status_open")
+    };
+    wkc_settings_t *current_settings = wkc_settings_get_current();
+    char chat_code_buffer[16];
+    snprintf(chat_code_buffer, sizeof(chat_code_buffer), "%06d",
+             current_settings->chat_passkey);
+    char *chat_code_options[] = { chat_code_buffer };
+
+    ui_menu_item_t *menu = calloc(7, sizeof(ui_menu_item_t));
+    menu[0] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_power_save"),
+        .current_value = current_settings->power_save,
+        .action = ui_settings_power_save_action
+    };
+    ui_settings_menu_set_options(&menu[0], power_save_options, 4);
+    menu[1] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_SWITCH,
+        .name = wkc_translations_get_string("settings_keep_advertise"),
+        .current_value = current_settings->keep_advertise,
+        .action = ui_settings_keep_advertise_action
+    };
+    menu[2] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_SWITCH,
+        .name = wkc_translations_get_string("settings_remember_peripherals"),
+        .current_value = current_settings->peripherals.remember_state,
+        .action = ui_settings_remember_peripherals_action
+    };
+    menu[3] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_homepage_status_bar_position"),
+        .current_value = current_settings->homepage_status_bar_position,
+        .action = ui_settings_status_bar_position_action
+    };
+    ui_settings_menu_set_options(&menu[3], status_bar_position_options, 2);
+    menu[4] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_chat_status"),
+        .current_value = (int)current_settings->chat_status,
+        .action = ui_settings_chat_status_action
+    };
+    ui_settings_menu_set_options(&menu[4], chat_status_options, 3);
+    menu[5] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_PICKER,
+        .name = wkc_translations_get_string("settings_chat_code"),
+        .current_value = 0,
+        .action = ui_settings_chat_passkey_action
+    };
+    ui_settings_menu_set_options(&menu[5], chat_code_options, 1);
+    menu[6] = (ui_menu_item_t) { .type = UI_MENU_ITEM_END };
+    return menu;
+}
+
+static ui_menu_item_t *ui_settings_build_advanced_menu()
+{
+    ui_menu_item_t *menu = calloc(4, sizeof(ui_menu_item_t));
+    menu[0] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_SWITCH,
+        .name = wkc_translations_get_string("settings_battery_calibration_mode"),
+        .current_value = battery_calibration_is_calibrating(),
+        .action = ui_settings_calibration_action
+    };
+    menu[1] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_clear_paired_devices"),
+        .action = ui_settings_reset_confirm_action
+    };
+    menu[2] = (ui_menu_item_t) {
+        .type = UI_MENU_ITEM_LABEL,
+        .name = wkc_translations_get_string("settings_factory_reset"),
+        .action = ui_settings_reset_confirm_action
+    };
+    menu[3] = (ui_menu_item_t) { .type = UI_MENU_ITEM_END };
+    return menu;
+}
+
+#pragma endregion
+
 static void ui_settings_draw_display_position(int index, display_format_t formats[],
-                                              display_orientation_t orientation, int output_timing)
+                                              display_orientation_t orientation,
+                                              int output_timing, bool force_frame)
 {
     char tip_message_upper[100];
     char tip_message_lower[100];
@@ -94,7 +501,7 @@ static void ui_settings_draw_display_position(int index, display_format_t format
         break;
     }
 
-    if (index == 0)
+    if (index == 0 || force_frame)
     {
         DISPLAY_CLEAR_SCREEN(0);
         DISPLAY_CLEAR_SCREEN(1);
@@ -575,599 +982,331 @@ static void ui_settings_draw_confirm(char *title, display_format_t formats[],
     free(cancel_result_secondary);
 }
 
-static void ui_settings_on_draw(ui_settings_t *settings, display_format_t *formats,
-                         display_orientation_t orientation)
+static void ui_settings_draw_menu(ui_settings_t *settings, display_format_t *formats,
+                                  display_orientation_t orientation)
 {
-    wkc_settings_t *current_settings = wkc_settings_get_current();
-    int logical_width = orientation == DISPLAY_ORIENTATION_HORIZONTAL ?
-                        DISPLAY_WIDTH_PAL : DISPLAY_HEIGHT_PAL;
-    int logical_height = orientation == DISPLAY_ORIENTATION_HORIZONTAL ?
-                         DISPLAY_HEIGHT_PAL : DISPLAY_WIDTH_PAL;
-    display_vector_t center = {
-        .x = logical_width / 2, .y = logical_height / 2
-    };
-    if (!settings->show && !settings->draw_request)
-        return;
+    int menu_count = ui_settings_get_menu_count(settings);
+    if (menu_count <= 0) return;
+    ui_menu_item_t *menu = settings->current_menu[menu_count - 1];
+    int item_count = ui_common_menu_get_item_count(menu);
+    if (item_count <= 0) return;
+    int selected = settings->selected_index[menu_count - 1];
+    if (selected >= item_count) selected = item_count - 1;
+    if (selected < 0) selected = 0;
 
-    if (settings->menu_state != UI_SETTINGS_DISPLAY_POSITION &&
-        (settings->show && orientation == DISPLAY_ORIENTATION_VERTICAL_TILED ||
-        settings->draw_request && settings->hirerachy_index == 0))
-    {
-        int language_count = wkc_translations_get_languages_count();
-        char **language_options = calloc(language_count, sizeof(char*));
-        for (int i = 0; i < language_count; i++)
-        {
-            language_options[i] = wkc_translations_get_language_name_from_index(i);
-        }
-        ui_menu_item_t main_items[] = {
-            { .type = UI_MENU_ITEM_LABEL, .name = wkc_translations_get_string("settings_display_settings") },
-            { .type = UI_MENU_ITEM_LABEL, .name = wkc_translations_get_string("settings_misc_settings") },
-            { .type = UI_MENU_ITEM_LABEL, .name = wkc_translations_get_string("settings_advanced_settings") },
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .count = language_count,
-                .name = wkc_translations_get_string("settings_language"),
-                .options = language_options,
-                .current_value = current_settings->language
-            },
-            {
-                .type = UI_MENU_ITEM_END
-            }
-        };
-        if (settings->show || settings->hirerachy_index == 0 &&
-            settings->last_selected_index == settings->selected_index[0]) // Refresh settings menu
-        {
-            if (settings->menu_state != UI_SETTINGS_ADVANCED_CONFIRM)
-            {
-                DISPLAY_CLEAR_SCREEN(0);
-                DISPLAY_CLEAR_SCREEN(1);
-            }
-            ui_common_menu_draw_item(main_items, settings->selected_index[0], true,
-                                     0, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, true, 0);
-        }
-        else
-        {
-            ui_common_menu_draw_item(main_items, settings->last_selected_index, false,
-                                     0, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-            ui_common_menu_draw_item(main_items, settings->selected_index[0], true,
-                                     0, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-        }
-        free(language_options);
-    }
+    int logical_width = orientation == DISPLAY_ORIENTATION_HORIZONTAL ? DISPLAY_WIDTH_PAL :
+                        DISPLAY_HEIGHT_PAL;
+    int logical_height = orientation == DISPLAY_ORIENTATION_HORIZONTAL ? DISPLAY_HEIGHT_PAL :
+                         DISPLAY_WIDTH_PAL;
+    display_vector_t center = { .x = logical_width / 2, .y = logical_height / 2 };
+    // The root menu is drawn on the first screen of the tiled output, the sub
+    // menus on the second one (same as before the refactor)
+    int prefer_side = menu_count == 1 ? 0 : 1;
 
-    // Normal menu
-    if (settings->menu_state == UI_SETTINGS_DISPLAY)
+    if (settings->show || settings->last_selected_index < 0)
     {
-        char *orientation_options[] = {
-            wkc_translations_get_string("settings_horizontal"),
-            wkc_translations_get_string("settings_vertical"),
-            wkc_translations_get_string("settings_vertical_tiled")
-        };
-        char *output_mode_options[] = {
-            wkc_translations_get_string("settings_rising_edge"),
-            wkc_translations_get_string("settings_falling_edge"),
-            wkc_translations_get_string("settings_debug_mode")
-        };
-        char *capture_index_options[] = {
-            wkc_translations_get_string("settings_screen_id_1"),
-            wkc_translations_get_string("settings_screen_id_2"),
-        };
-        ui_menu_item_t items[] = {
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .name = wkc_translations_get_string("settings_screen_orientation"),
-                .count = 3,
-                .options = orientation_options,
-                .current_value = wkc_settings_get_current()->display.orientation
-            },
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .name = wkc_translations_get_string("settings_output_mode"),
-                .count = 3,
-                .options = output_mode_options,
-                .current_value = wkc_settings_get_current()->display.output_mode
-            },
-            {
-                .type = UI_MENU_ITEM_LABEL,
-                .name = wkc_translations_get_string("settings_adjust_position")
-            },
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .name = wkc_translations_get_string("settings_capture_output"),
-                .count = 2,
-                .options = capture_index_options,
-                .current_value = wkc_settings_get_current()->display.capture_index
-            },
-            {
-                .type = UI_MENU_ITEM_SWITCH,
-                .name = wkc_translations_get_string("settings_capture_osd"),
-                .count = 2,
-                .current_value = wkc_settings_get_current()->display.capture_osd
-            },
-            {
-                .type = UI_MENU_ITEM_END
-            }
-        };
-        if (settings->show || settings->last_selected_index < 0)
+        bool tiled = orientation == DISPLAY_ORIENTATION_VERTICAL_TILED;
+        // In the tiled output the first screen shows the parent menu. Opening a
+        // sub menu from it keeps that screen intact, so only the second screen
+        // is refreshed; a real full repaint (orientation change, page refresh)
+        // erases and redraws both screens.
+        if (tiled && menu_count >= 2 && !settings->parent_needs_repaint)
         {
-            if (orientation != DISPLAY_ORIENTATION_VERTICAL_TILED)
-                DISPLAY_CLEAR_SCREEN(0);
             DISPLAY_CLEAR_SCREEN(1);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, true, 0);
         }
         else
         {
-            ui_common_menu_draw_item(items, settings->last_selected_index, false,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-        }
-    }
-    else if (settings->menu_state == UI_SETTINGS_MISC)
-    {
-        char *power_save_options[] = {
-            wkc_translations_get_string("settings_never"),
-            wkc_translations_get_string("settings_1min"),
-            wkc_translations_get_string("settings_5min"),
-            wkc_translations_get_string("settings_10min"),
-        };
-        char *homepage_status_bar_position_options[] = {
-            wkc_translations_get_string("settings_top"),
-            wkc_translations_get_string("settings_bottom")
-        };
-        ui_menu_item_t items[] = {
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .name = wkc_translations_get_string("settings_power_save"),
-                .count = 4,
-                .options = power_save_options,
-                .current_value = wkc_settings_get_current()->power_save
-            },
-            {
-                .type = UI_MENU_ITEM_SWITCH,
-                .name = wkc_translations_get_string("settings_keep_advertise"),
-                .current_value = wkc_settings_get_current()->keep_advertise
-            },
-            {
-                .type = UI_MENU_ITEM_SWITCH,
-                .name = wkc_translations_get_string("settings_remember_peripherals"),
-                .current_value = wkc_settings_get_current()->peripherals.remember_state
-            },
-            {
-                .type = UI_MENU_ITEM_PICKER,
-                .name = wkc_translations_get_string("settings_homepage_status_bar_position"),
-                .count = 2,
-                .options = homepage_status_bar_position_options,
-                .current_value = wkc_settings_get_current()->homepage_status_bar_position
-            },
-            {
-                .type = UI_MENU_ITEM_END
-            }
-        };
-        if (settings->show || settings->last_selected_index < 0)
-        {
-            if (orientation != DISPLAY_ORIENTATION_VERTICAL_TILED)
-                DISPLAY_CLEAR_SCREEN(0);
+            DISPLAY_CLEAR_SCREEN(0);
             DISPLAY_CLEAR_SCREEN(1);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, true, 0);
-        }
-        else
-        {
-            ui_common_menu_draw_item(items, settings->last_selected_index, false,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-        }
-    }
-    else if (settings->menu_state == UI_SETTINGS_ADVANCED)
-    {
-        ui_menu_item_t items[] = {
+            if (tiled && menu_count >= 2)
             {
-                .type = UI_MENU_ITEM_SWITCH,
-                .name = wkc_translations_get_string("settings_battery_calibration_mode"),
-                .current_value = battery_calibration_is_calibrating()
-            },
-            {
-                .type = UI_MENU_ITEM_LABEL,
-                .name = wkc_translations_get_string("settings_clear_paired_devices")
-            },
-            {
-                .type = UI_MENU_ITEM_LABEL,
-                .name = wkc_translations_get_string("settings_factory_reset")
-            },
-            {
-                .type = UI_MENU_ITEM_END
+                ui_menu_item_t *parent_menu = settings->current_menu[menu_count - 2];
+                int parent_count = ui_common_menu_get_item_count(parent_menu);
+                int parent_selected = parent_count > 0 ?
+                                      settings->selected_index[menu_count - 2] : 0;
+                if (parent_selected >= parent_count) parent_selected = parent_count - 1;
+                if (parent_selected < 0) parent_selected = 0;
+                if (parent_count > 0)
+                    ui_common_menu_draw_item(parent_menu, parent_selected, true, 0, &center,
+                                             UI_MENU_ALIGN_CENTER, UI_MENU_ALIGN_CENTER,
+                                             formats, orientation, true, 0);
             }
-        };
-        if (settings->show || settings->last_selected_index < 0)
-        {
-            if (orientation != DISPLAY_ORIENTATION_VERTICAL_TILED)
-                DISPLAY_CLEAR_SCREEN(0);
-            DISPLAY_CLEAR_SCREEN(1);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, true, 0);
         }
-        else
-        {
-            ui_common_menu_draw_item(items, settings->last_selected_index, false,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-            ui_common_menu_draw_item(items, settings->selected_index
-                                     [settings->hirerachy_index], true,
-                                     1, &center, UI_MENU_ALIGN_CENTER,
-                                     UI_MENU_ALIGN_CENTER, formats, orientation, false, 0);
-        }
+        ui_common_menu_draw_item(menu, selected, true, prefer_side, &center,
+                                 UI_MENU_ALIGN_CENTER, UI_MENU_ALIGN_CENTER,
+                                 formats, orientation, true, 0);
     }
-    else if (settings->menu_state == UI_SETTINGS_DISPLAY_POSITION)
+    else
     {
-        ui_settings_draw_display_position(settings->selected_index[settings->hirerachy_index],
-            formats, orientation, current_settings->display.position[
-                settings->selected_index[settings->hirerachy_index] / 2].output_timing);
+        if (settings->last_selected_index != selected)
+            ui_common_menu_draw_item(menu, settings->last_selected_index, false, prefer_side,
+                                     &center, UI_MENU_ALIGN_CENTER, UI_MENU_ALIGN_CENTER,
+                                     formats, orientation, false, 0);
+        ui_common_menu_draw_item(menu, selected, true, prefer_side, &center,
+                                 UI_MENU_ALIGN_CENTER, UI_MENU_ALIGN_CENTER,
+                                 formats, orientation, false, 0);
     }
-    else if (settings->menu_state == UI_SETTINGS_ADVANCED_CONFIRM)
+}
+
+static void ui_settings_on_draw(ui_settings_t *settings, display_format_t *formats,
+                                display_orientation_t orientation)
+{
+    if (!settings->show && !settings->draw_request) return;
+
+    bool full_repaint = settings->show;
+    if (settings->special == UI_SETTINGS_SPECIAL_POSITION)
     {
-        char title[50];
-        if (settings->hirerachy_index > 0)
-        {
-            if(settings->selected_index[settings->hirerachy_index - 1] == 0)
-                strcpy(title, wkc_translations_get_string("settings_confirm_clear_devices"));
-            else
-                strcpy(title, wkc_translations_get_string("settings_confirm_factory_reset"));
-        }
-        ui_settings_draw_confirm(title, formats, orientation,
-            settings->selected_index[settings->hirerachy_index]);
+        wkc_settings_t *current_settings = wkc_settings_get_current();
+        int index = settings->special_index;
+        ui_settings_draw_display_position(index, formats, orientation,
+            current_settings->display.position[index / 2].output_timing, full_repaint);
+    }
+    else if (settings->special == UI_SETTINGS_SPECIAL_CONFIRM)
+    {
+        // A full repaint (e.g. the phone changed a setting) has to refresh the
+        // menu below the dialog as well
+        if (full_repaint)
+            ui_settings_draw_menu(settings, formats, orientation);
+        char *title = wkc_translations_get_string(settings->confirm_target == 1 ?
+            "settings_confirm_clear_devices" : "settings_confirm_factory_reset");
+        ui_settings_draw_confirm(title, formats, orientation, settings->special_index != 0);
+    }
+    else
+    {
+        ui_settings_draw_menu(settings, formats, orientation);
     }
 
     settings->show = false;
     settings->draw_request = false;
-    settings->last_selected_index = settings->selected_index[settings->hirerachy_index];
+    int menu_count = ui_settings_get_menu_count(settings);
+    if (menu_count > 0)
+        settings->last_selected_index = settings->selected_index[menu_count - 1];
+}
+
+static void ui_settings_on_show(ui_settings_t *settings)
+{
+    ui_settings_menu_free_all(settings);
+    settings->show = true;
+    settings->draw_request = true;
+    settings->last_selected_index = -1;
+    settings->special = UI_SETTINGS_SPECIAL_NONE;
+    settings->special_index = 0;
+    settings->confirm_target = 0;
+    ui_settings_menu_push(settings, ui_settings_build_main_menu());
+    settings->parent_needs_repaint = true;
+}
+
+// Rebuilds the open menu path so labels (translations) and values are re-read.
+// Needed when the language changes or when the phone changes a setting while
+// this page is open (both end up as a refresh request from the shell).
+static void ui_settings_rebuild_menus(ui_settings_t *settings)
+{
+    int depth = ui_settings_get_menu_count(settings);
+    int selection[UI_SETTINGS_MENU_MAX_DEPTH];
+    for (int i = 0; i < depth; i++)
+        selection[i] = settings->selected_index[i];
+    ui_settings_menu_free_all(settings);
+    if (depth <= 0)
+        return;
+    ui_settings_menu_push(settings, ui_settings_build_main_menu());
+    if (depth >= 2)
+    {
+        int root = selection[0];
+        ui_menu_item_t *sub_menu = root == 0 ? ui_settings_build_display_menu() :
+                                   root == 1 ? ui_settings_build_misc_menu() :
+                                   ui_settings_build_advanced_menu();
+        ui_settings_menu_push(settings, sub_menu);
+    }
+    for (int i = 0; i < depth; i++)
+    {
+        int item_count = ui_common_menu_get_item_count(settings->current_menu[i]);
+        settings->selected_index[i] = item_count > 0 ?
+                                      clamp(selection[i], 0, item_count - 1) : 0;
+    }
+}
+
+static void ui_settings_on_refresh(ui_settings_t *settings)
+{
+    ui_settings_rebuild_menus(settings);
+    settings->parent_needs_repaint = true;
+    settings->show = true;
+    settings->draw_request = true;
+    settings->last_selected_index = -1;
 }
 
 static void ui_settings_on_key_event(ui_settings_t *settings, int key_code)
 {
     wkc_settings_t *current_settings = wkc_settings_get_current();
+    display_orientation_t orientation = ui_shell_get_orientation(settings->base.parent);
+
+    // Display position editor (full screen)
+    if (settings->special == UI_SETTINGS_SPECIAL_POSITION)
+    {
+        if (key_code == UI_KEY_CODE_EXIT ||
+            (key_code == UI_KEY_CODE_OK && settings->special_index >= 3))
+        {
+            settings->special = UI_SETTINGS_SPECIAL_NONE;
+            settings->show = true;
+            settings->draw_request = true;
+            settings->last_selected_index = -1;
+            return;
+        }
+        if (key_code == UI_KEY_CODE_OK)
+        {
+            settings->special_index += 1;
+            settings->draw_request = true;
+            return;
+        }
+        if (settings->special_index % 2 == 0)
+        {
+            int *x_offset = &current_settings->display.position[
+                settings->special_index / 2].x_offset;
+            int *y_offset = &current_settings->display.position[
+                settings->special_index / 2].y_offset;
+            if (orientation == DISPLAY_ORIENTATION_HORIZONTAL)
+            {
+                if (key_code == UI_KEY_CODE_UP)
+                    *y_offset -= 1;
+                if (key_code == UI_KEY_CODE_DOWN)
+                    *y_offset += 1;
+                if (key_code == UI_KEY_CODE_LEFT)
+                    *x_offset -= 1;
+                if (key_code == UI_KEY_CODE_RIGHT)
+                    *x_offset += 1;
+            }
+            else
+            {
+                if (key_code == UI_KEY_CODE_UP)
+                    *x_offset += 1;
+                if (key_code == UI_KEY_CODE_DOWN)
+                    *x_offset -= 1;
+                if (key_code == UI_KEY_CODE_LEFT)
+                    *y_offset -= 1;
+                if (key_code == UI_KEY_CODE_RIGHT)
+                    *y_offset += 1;
+            }
+            *y_offset = clamp(*y_offset, -16, 16);
+            *x_offset = clamp(*x_offset, -128, 127);
+            display_settings_update();
+            wkc_settings_save();
+            return;
+        }
+        int *output_timing = &current_settings->display.position[
+            settings->special_index / 2].output_timing;
+        if (key_code == UI_KEY_CODE_LEFT)
+            *output_timing -= 1;
+        if (key_code == UI_KEY_CODE_RIGHT)
+            *output_timing += 1;
+        *output_timing = clamp(*output_timing, -15, 15);
+        settings->draw_request = true;
+        wkc_settings_save();
+        return;
+    }
+
+    // Confirmation dialog (full screen)
+    if (settings->special == UI_SETTINGS_SPECIAL_CONFIRM)
+    {
+        if (key_code == UI_KEY_CODE_EXIT || key_code == UI_KEY_CODE_OK)
+        {
+            if (key_code == UI_KEY_CODE_OK && settings->special_index != 0)
+            {
+                if (settings->confirm_target == 1)
+                {
+                    wkc_security_load_default();
+                    esp_restart();
+                }
+                else
+                {
+                    wkc_userprofile_load_default();
+                    wkc_settings_load_default();
+                    wkc_security_load_default();
+                    camera_control_reset();
+                    esp_restart();
+                }
+                return;
+            }
+            settings->special = UI_SETTINGS_SPECIAL_NONE;
+            settings->show = true;
+            settings->draw_request = true;
+            settings->last_selected_index = -1;
+            return;
+        }
+        if ((orientation == DISPLAY_ORIENTATION_HORIZONTAL && (key_code == UI_KEY_CODE_LEFT ||
+             key_code == UI_KEY_CODE_RIGHT)) ||
+            (orientation != DISPLAY_ORIENTATION_HORIZONTAL && (key_code == UI_KEY_CODE_UP ||
+             key_code == UI_KEY_CODE_DOWN)))
+        {
+            settings->special_index = !settings->special_index;
+            settings->draw_request = true;
+        }
+        return;
+    }
+
+    int menu_count = ui_settings_get_menu_count(settings);
+    if (menu_count <= 0) return;
+    ui_menu_item_t *menu = settings->current_menu[menu_count - 1];
+    int item_count = ui_common_menu_get_item_count(menu);
+    if (item_count <= 0) return;
+    int *selected = &settings->selected_index[menu_count - 1];
+
     if (key_code == UI_KEY_CODE_EXIT)
     {
-        if (settings->hirerachy_index == 0)
+        if (menu_count <= 1)
         {
             ui_page_t *home = ui_shell_find_page(settings->base.parent, UI_PAGE_TYPE_HOME);
             ui_shell_show_page(settings->base.parent, home);
         }
         else
         {
-            settings->hirerachy_index -= 1;
-            settings->show = true;
-            settings->draw_request = true;
-            settings->last_selected_index = settings->selected_index[settings->hirerachy_index];
+            // Back to the previous menu
+            ui_settings_menu_pop(settings);
         }
-        settings->menu_state = settings->menu_state == UI_SETTINGS_DISPLAY_POSITION ?
-        UI_SETTINGS_DISPLAY  : settings->menu_state == UI_SETTINGS_ADVANCED_CONFIRM ?
-        UI_SETTINGS_ADVANCED : UI_SETTINGS_MAIN;
+        return;
     }
-    else
-    {
-        bool refresh = false;
-        int *current_index = &settings->selected_index[settings->hirerachy_index];
-        int *next_index = &settings->selected_index[settings->hirerachy_index + 1];
-        switch (settings->menu_state)
-        {
-            case UI_SETTINGS_MAIN:
-            {
-                if (key_code == UI_KEY_CODE_DOWN)
-                {
-                    *current_index += 1;
-                    refresh = true;
-                }
-                else if (key_code == UI_KEY_CODE_UP)
-                {
-                    *current_index += 3;
-                    refresh = true;
-                }
-                else if (key_code == UI_KEY_CODE_OK)
-                {
-                    if (*current_index == 0)
-                        settings->menu_state = UI_SETTINGS_DISPLAY;
-                    else if (*current_index == 1)
-                        settings->menu_state = UI_SETTINGS_MISC;
-                    else if (*current_index == 2)
-                        settings->menu_state = UI_SETTINGS_ADVANCED;
-                    if (*current_index <= 2)
-                    {
-                        settings->hirerachy_index += 1;
-                        *next_index = 0;
-                        settings->last_selected_index = ~0;
-                        refresh = true;
-                    }
-                }
-                else if (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT)
-                {
-                    if (*current_index == 3)
-                    {
-                        int language_count = wkc_translations_get_languages_count();
-                        current_settings->language += key_code == UI_KEY_CODE_LEFT ?
-                                          language_count - 1 : 1;
-                        current_settings->language %= language_count;
-                        refresh = true;
-                        wkc_settings_save();
-                    }
-                }
-                *current_index %= 4;
-            }
-            break;
-            case UI_SETTINGS_DISPLAY:
-            {
-                if (key_code == UI_KEY_CODE_DOWN)
-                {
-                    *current_index += 1;
-                    refresh = true;
-                }
-                else if (key_code == UI_KEY_CODE_UP)
-                {
-                    *current_index += 4;
-                    refresh = true;
-                }
-                else if (*current_index == 0 &&
-                        (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT))
-                {
-                    current_settings->display.orientation += key_code == UI_KEY_CODE_LEFT ? 2 :
-                                                           key_code == UI_KEY_CODE_RIGHT ? 1 :
-                                                           0;
-                    current_settings->display.orientation %= 3;
-                    refresh = true;
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "screen_orientation");
-                }
-                else if (*current_index == 1 &&
-                        (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT))
-                {
-                    current_settings->display.output_mode +=
-                                      key_code == UI_KEY_CODE_LEFT ? 2 :
-                                      key_code == UI_KEY_CODE_RIGHT ? 1 :
-                                      0;
-                    current_settings->display.output_mode %= 3;
-                    refresh = true;
-                    display_settings_update();
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "output_mode");
-                }
-                else if (*current_index == 2 && key_code == UI_KEY_CODE_OK)
-                {
-                    settings->hirerachy_index += 1;
-                    settings->menu_state = UI_SETTINGS_DISPLAY_POSITION;
-                    *next_index = 0;
-                    settings->last_selected_index = ~0;
-                    refresh = true;
-                }
-                else if (*current_index == 3 &&
-                        (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT))
-                {
-                    current_settings->display.capture_index =
-                        !current_settings->display.capture_index;
-                    refresh = true;
-                    display_settings_update();
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_card_output");
-                }
-                else if (*current_index == 4 && key_code == UI_KEY_CODE_OK)
-                {
-                    current_settings->display.capture_osd =
-                        !current_settings->display.capture_osd;
-                    refresh = true;
-                    display_settings_update();
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_with_osd");
-                }
-                *current_index %= 5;
-            }
-            break;
-            case UI_SETTINGS_DISPLAY_POSITION:
-            {
-                if (key_code == UI_KEY_CODE_OK)
-                {
-                    if (*current_index == 3)
-                    {
-                        ui_settings_on_key_event(settings, UI_KEY_CODE_EXIT);
-                        return;
-                    }
-                    else
-                        *current_index += 1;
-                    refresh = true;
-                }
-                else if (*current_index < 4)
-                {
-                    if (*current_index % 2 == 0)
-                    {
-                        int *x_offset = &current_settings->display.position[
-                                *current_index / 2].x_offset;
-                        int *y_offset = &current_settings->display.position[
-                                *current_index / 2].y_offset;
-                        if (ui_shell_get_orientation(settings->base.parent) ==
-                             DISPLAY_ORIENTATION_HORIZONTAL)
-                        {
-                            if (key_code == UI_KEY_CODE_UP)
-                                *y_offset -= 1;
-                            if (key_code == UI_KEY_CODE_DOWN)
-                                *y_offset += 1;
-                            if (key_code == UI_KEY_CODE_LEFT)
-                                *x_offset -= 1;
-                            if (key_code == UI_KEY_CODE_RIGHT)
-                                *x_offset += 1;
-                        }
-                        else
-                        {
-                            if (key_code == UI_KEY_CODE_UP)
-                                *x_offset += 1;
-                            if (key_code == UI_KEY_CODE_DOWN)
-                                *x_offset -= 1;
-                            if (key_code == UI_KEY_CODE_LEFT)
-                                *y_offset -= 1;
-                            if (key_code == UI_KEY_CODE_RIGHT)
-                                *y_offset += 1;
-                        }
-                        *y_offset = clamp(*y_offset, -16, 16);
-                        *x_offset = clamp(*x_offset, -128, 127);
-                        display_settings_update();
-                        wkc_settings_save();
-                    }
-                    else
-                    {
-                        int *output_timing = &current_settings->display.position[
-                                *current_index / 2].output_timing;
-                        if (key_code == UI_KEY_CODE_LEFT)
-                            *output_timing -= 1;
-                        if (key_code == UI_KEY_CODE_RIGHT)
-                            *output_timing += 1;
-                        *output_timing = clamp(*output_timing, -15, 15);
-                        refresh = true;
-                        wkc_settings_save();
-                    }
-                }
-            }
-            break;
-            case UI_SETTINGS_MISC:
-            {
-                if (key_code == UI_KEY_CODE_DOWN)
-                {
-                    *current_index += 1;
-                    refresh = true;
-                }
-                else if (key_code == UI_KEY_CODE_UP)
-                {
-                    *current_index += 3;
-                    refresh = true;
-                }
-                else if (*current_index == 0 &&
-                        (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT))
-                {
-                    current_settings->power_save += key_code == UI_KEY_CODE_LEFT ? 3 :
-                                                           key_code == UI_KEY_CODE_RIGHT ? 1 :
-                                                           0;
-                    current_settings->power_save %= 4;
-                    refresh = true;
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "power_save");
-                }
-                else if (*current_index == 1 && key_code == UI_KEY_CODE_OK)
-                {
-                    current_settings->keep_advertise = !current_settings->keep_advertise;
-                    refresh = true;
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "keep_advertise");
-                }
-                else if (*current_index == 2 && key_code == UI_KEY_CODE_OK)
-                {
-                    current_settings->peripherals.remember_state =
-                    !current_settings->peripherals.remember_state;
-                    refresh = true;
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "remember_peripherals");
-                }
-                else if (*current_index == 3 &&
-                        (key_code == UI_KEY_CODE_LEFT) || key_code == UI_KEY_CODE_RIGHT)
-                {
-                    current_settings->homepage_status_bar_position =
-                        !current_settings->homepage_status_bar_position;
-                    refresh = true;
-                    wkc_settings_save();
-                    protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "homepage_status_bar_position");
-                }
-                *current_index %= 4;
-            }
-            break;
-            case UI_SETTINGS_ADVANCED:
-            {
-                if (key_code == UI_KEY_CODE_UP || key_code == UI_KEY_CODE_DOWN)
-                {
-                    *current_index += key_code == UI_KEY_CODE_DOWN ? 1 : 2;
-                    *current_index %= 3;
-                    refresh = true;
-                }
-                else if (key_code == UI_KEY_CODE_OK)
-                {
-                    if (*current_index == 0)
-                    {
-                        battery_calibration_set(!battery_calibration_is_calibrating());
-                        refresh = true;
-                    }
-                    else
-                    {
-                        settings->hirerachy_index += 1;
-                        settings->menu_state = UI_SETTINGS_ADVANCED_CONFIRM;
-                        settings->show = true;
-                        *next_index = 0;
-                        settings->last_selected_index = 0;
-                        refresh = true;
-                    }
-                }
-            }
-            break;
-            case UI_SETTINGS_ADVANCED_CONFIRM:
-            {
-                if (key_code == UI_KEY_CODE_OK)
-                {
-                    if (*current_index == 0)
-                    {
-                        ui_settings_on_key_event(settings, UI_KEY_CODE_EXIT);
-                        return;
-                    }
-                    else if (settings->selected_index[settings->hirerachy_index - 1] == 1)
-                    {
-                        wkc_security_load_default();
-                        esp_restart();
-                    }
-                    else
-                    {
-                        wkc_userprofile_load_default();
-                        wkc_settings_load_default();
-                        wkc_security_load_default();
-                        camera_control_reset();
-                        esp_restart();
-                    }
-                }
-                else if ((ui_shell_get_orientation(settings->base.parent) ==
-                         DISPLAY_ORIENTATION_HORIZONTAL && (key_code == UI_KEY_CODE_LEFT ||
-                         key_code == UI_KEY_CODE_RIGHT)) ||
-                         (ui_shell_get_orientation(settings->base.parent) !=
-                         DISPLAY_ORIENTATION_HORIZONTAL && (key_code == UI_KEY_CODE_UP ||
-                         key_code == UI_KEY_CODE_DOWN)))
-                {
-                    *current_index = !*current_index;
-                    refresh = true;
-                }
-            }
-            break;
-            default:
-                break;
-        }
-        if (refresh)
-        {
-            settings->draw_request = true;
-        }
-    }
-}
 
-static void ui_settings_on_refresh(ui_settings_t *settings)
-{
-    settings->show = true;
-    settings->draw_request = true;
-    settings->last_selected_index = ~settings->selected_index[settings->hirerachy_index];
+    if (key_code == UI_KEY_CODE_DOWN || key_code == UI_KEY_CODE_UP)
+    {
+        // Wraps around, as the page always did
+        settings->last_selected_index = *selected;
+        *selected = (*selected + (key_code == UI_KEY_CODE_DOWN ? 1 : item_count - 1)) %
+                    item_count;
+        settings->draw_request = true;
+        return;
+    }
+
+    ui_menu_item_t *item = &menu[*selected];
+    settings->last_selected_index = *selected;
+    if (key_code == UI_KEY_CODE_LEFT || key_code == UI_KEY_CODE_RIGHT)
+    {
+        if (item->type == UI_MENU_ITEM_PICKER)
+        {
+            if (item->count > 1)
+            {
+                // Pickers wrap around (unlike the camera menu)
+                item->current_value = (item->current_value + item->count +
+                    (key_code == UI_KEY_CODE_RIGHT ? 1 : item->count - 1)) % item->count;
+            }
+            // count == 1 entries (e.g. the chat code) act on every press
+            if (item->action != NULL)
+                item->action(item, (ui_page_t*)settings);
+            settings->draw_request = true;
+        }
+        return;
+    }
+    if (key_code == UI_KEY_CODE_OK)
+    {
+        if (item->type == UI_MENU_ITEM_SWITCH)
+        {
+            item->current_value = !item->current_value;
+            if (item->action != NULL)
+                item->action(item, (ui_page_t*)settings);
+            settings->draw_request = true;
+        }
+        else if (item->type == UI_MENU_ITEM_LABEL && item->action != NULL)
+        {
+            item->action(item, (ui_page_t*)settings);
+        }
+    }
 }
 
 ui_page_t *ui_settings_create()
