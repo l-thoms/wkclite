@@ -311,7 +311,7 @@ static void quicksettings_check_settings_home()
     }
 }
 
-static void quicksettings_update()
+void protocol_quicksettings_update()
 {
     quicksettings_check_settings_home();
     wkc_settings_save();
@@ -398,52 +398,52 @@ uint8_t protocol_quicksettings_write(char *command)
         {
             settings->display.orientation = (int)cJSON_GetNumberValue(child);
             display_settings_update();
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "output_mode") == 0)
         {
             settings->display.output_mode = (int)cJSON_GetNumberValue(child);
             display_settings_update();
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "capture_card_output") == 0)
         {
             settings->display.capture_index = (int)cJSON_GetNumberValue(child);
             display_settings_update();
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "capture_with_osd") == 0)
         {
             settings->display.capture_osd = cJSON_IsTrue(child);
             display_settings_update();
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "power_save") == 0)
         {
             settings->power_save = (int)cJSON_GetNumberValue(child);
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "keep_advertise") == 0)
         {
             settings->keep_advertise = cJSON_IsTrue(child);
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "remember_peripherals") == 0)
         {
             settings->peripherals.remember_state = cJSON_IsTrue(child);
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "homepage_status_bar_position") == 0)
         {
             settings->homepage_status_bar_position = cJSON_GetNumberValue(child);
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "chat_status") == 0)
@@ -454,14 +454,14 @@ uint8_t protocol_quicksettings_write(char *command)
                 (int)cJSON_GetNumberValue(child) != WKC_CHAT_STATUS_LIMITED)
                 update_misc_table = true;
             settings->chat_status = clamp((int)cJSON_GetNumberValue(child), 0, 2);
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "chat_passkey") == 0)
         {
             update_misc_table = true;
             settings->chat_passkey = esp_random() % (int)1e6;
-            quicksettings_update();
+            protocol_quicksettings_update();
             ret = 0;
         }
         else if (strcmp(child->string, "language") == 0)

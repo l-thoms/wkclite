@@ -5,17 +5,17 @@
     "homepage_status_bar_position": 0,
     "display": {
         "direction": 0,
-        "output_mode": 0,
+        "output_mode": 1,
         "capture_index": 0,
         "capture_osd": false,
         "position": [
             {
-                "x_offset": 0,
+                "x_offset": 30,
                 "y_offset": 0,
                 "output_timing": 0
             },
             {
-                "x_offset": 0,
+                "x_offset": 30,
                 "y_offset": 0,
                 "output_timing": 0
             }

@@ -15,8 +15,8 @@
 // For vertical tiled orientation, pixels are 3x downscaled and uses NTSC resources,
 // while horizontal stride in buffers should be 344 pixels for 8-pixel alignment,
 // the value of padding pixels is not cared but recommended to be filled with 00.
-// For non-tiled orientations, I2S pixel timing is 625 * 400 * 30 = 7,500,000.
-// For vertical tiled orientation, 400 * 312.5 * 60 = 7,500,000.
+// For non-tiled orientations, I2S pixel timing is 572 * 437.5 * 29.97 = 7,500,000.
+// For vertical tiled orientation, same total timing as NTSC.
 // XGA format only uses primary frame buffers while both I2S channels share the same
 // one. For non-tiled orientations, draw calls on the secondary buffers should be ignored;
 // for vertical tiled orientation, draw calls on the both buffers should be mapped into the
@@ -46,7 +46,8 @@ typedef enum
 {
     DISPLAY_ORIENTATION_HORIZONTAL,
     DISPLAY_ORIENTATION_VERTICAL,
-    DISPLAY_ORIENTATION_VERTICAL_TILED
+    DISPLAY_ORIENTATION_VERTICAL_TILED,
+    DISPLAY_ORIENTATION_COUNT
 } display_orientation_t;
 
 typedef enum

@@ -8,6 +8,5 @@ idf_build_set_property(MINIMAL_BUILD ON)
 project(WKCLite)
 idf_build_set_property(COMPILE_OPTIONS "-Wno-parentheses" APPEND)
 
-# After the first build, comment out the image generation code
 fatfs_create_rawflash_image(data_static resources FLASH_IN_PROJECT)
 fatfs_create_rawflash_image(data_fonts fonts FLASH_IN_PROJECT)

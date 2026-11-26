@@ -9,6 +9,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "display/display_control.h"
+#include "profile/settings.h"
+#include "protocol/ble.h"
+#include "protocol/quicksettings.h"
 #include "io/power_key.h"
 #include "ui/shell.h"
 #include "ui/ui_common.h"
@@ -35,6 +39,13 @@
 static int gpio0_presses = 0;
 static int64_t gpio0_last_time = 0;
 static bool gpio0_consumed = false;
+
+// Special keys for toggling screen OSD, index and orientation
+#define SPECIAL_KEY_CAPTURE_OSD 0x101
+#define SPECIAL_KEY_SCREEN_INDEX 0x102
+#define SPECIAL_KEY_SCREEN_ORIENTATION_LEFT 0x103
+#define SPECIAL_KEY_SCREEN_ORIENTATION_RIGHT 0x104
+#define SPECIAL_KEY_SCREEN_REVERT_OUTPUT_MODE 0x105
 
 // Accumulates 'z' presses into a short or a long GPIO0 event
 static void serialport_gpio0_press(int64_t now)
@@ -98,6 +109,21 @@ static int serialport_map_key(uint8_t c)
         case 'z':
         case 'Z':
             return SERIALPORT_KEY_GPIO0;
+        case 'x':
+        case 'X':
+            return SPECIAL_KEY_CAPTURE_OSD;
+        case 'c':
+        case 'C':
+            return SPECIAL_KEY_SCREEN_INDEX;
+        case 'v':
+        case 'V':
+            return SPECIAL_KEY_SCREEN_ORIENTATION_LEFT;
+        case 'b':
+        case 'B':
+            return SPECIAL_KEY_SCREEN_ORIENTATION_RIGHT;
+        case 'n':
+        case 'N':
+            return SPECIAL_KEY_SCREEN_REVERT_OUTPUT_MODE;
         default:
             // Ignore line endings and any other character
             return 0;
@@ -107,9 +133,54 @@ static int serialport_map_key(uint8_t c)
 static void serialport_inject(int key)
 {
     ui_shell_t *shell = ui_shell_get_current();
-    if (shell == NULL)
+    wkc_settings_t *settings = wkc_settings_get_current();
+    if (shell == NULL || settings == NULL)
         return;
-    ui_shell_send_key(shell, key);
+    switch (key)
+    {
+        case SPECIAL_KEY_CAPTURE_OSD:
+            settings->display.capture_osd = !settings->display.capture_osd;
+            display_settings_update();
+            protocol_quicksettings_update();
+            ESP_LOGI(TAG, "OSD %s", settings->display.capture_osd ? "enabled": "disabled");
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_with_osd");
+            break;
+        case SPECIAL_KEY_SCREEN_INDEX:
+            settings->display.capture_index = !settings->display.capture_index;
+            display_settings_update();
+            protocol_quicksettings_update();
+            ESP_LOGI(TAG, "Current screen index is %s", settings->display.capture_index ?
+                "secondary": "primary");
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "capture_card_output");
+            break;
+        case SPECIAL_KEY_SCREEN_ORIENTATION_LEFT:
+            settings->display.orientation = (settings->display.orientation +
+                DISPLAY_ORIENTATION_COUNT - 1) % DISPLAY_ORIENTATION_COUNT;
+            display_settings_update();
+            protocol_quicksettings_update();
+            ESP_LOGI(TAG, "Current screen orientation is %d", settings->display.orientation);
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "screen_orientation");
+            break;
+        case SPECIAL_KEY_SCREEN_ORIENTATION_RIGHT:
+            settings->display.orientation = (settings->display.orientation + 1) %
+                DISPLAY_ORIENTATION_COUNT;
+            display_settings_update();
+            protocol_quicksettings_update();
+            ESP_LOGI(TAG, "Current screen orientation is %d", settings->display.orientation);
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "screen_orientation");
+            break;
+        case SPECIAL_KEY_SCREEN_REVERT_OUTPUT_MODE:
+            // Use this key if OSD image is unstable because output mode is debug mode
+            settings->display.output_mode = 1;
+            display_settings_update();
+            protocol_quicksettings_update();
+            ESP_LOGI(TAG, "Output mode has been reverted");
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "output_mode");
+            break;
+        default:
+            ui_shell_send_key(shell, key);
+            break;
+    }
 }
 
 static void serialport_task(void *args)
