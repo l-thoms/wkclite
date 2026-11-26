@@ -2,6 +2,9 @@
 
 # ![WKCLite_Logo](./WKCLite.svg)
 
+> [!WARNING]
+> v0.3.0.0 协议尚未冻结，部分功能可能会随时发生变更。
+
 [English](./README.md)
 
 基于 ESP32-S3 模块及 AGRV2KQ32 FPGA/CPLD 的模拟 Kigurumi 双目视野增强方案。

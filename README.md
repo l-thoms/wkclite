@@ -2,6 +2,9 @@
 
 # ![WKCLite_Logo](./WKCLite.svg)
 
+> [!WARNING]
+> v0.3.0.0 protocol is not frozen yet, some features might be changed at any time.
+
 [简体中文](./README_CN.md)
 
 An analog binocular kigurumi vision enhancemnent project based on ESP32-S3 module and AGRV2KQ32 CPLD/FPGA.
