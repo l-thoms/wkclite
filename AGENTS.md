@@ -134,7 +134,7 @@ snapshot of what it looked like when this document was written.
 | `Space` | OK | `q` | EXIT |
 | `e` | MENU | `z` | GPIO0 key |
 | `x` | OSD visibility | `c` | Screen index
-| `c` / `v` | Screen orientation select
+| `v` / `b` | Screen orientation select | `n` | Revert output mode to falling edge
 
 - GPIO0 gesture (currently: three `z` within 0.5 s = long press, one or two = short presses) is
   implemented in the same file.
