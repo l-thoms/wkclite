@@ -126,7 +126,7 @@ void display_set_pixel(int screen_index, display_orientation_t orientation, int 
         if(orientation == DISPLAY_ORIENTATION_HORIZONTAL)
             pixel_index = y * DISPLAY_WIDTH_PAL + x;
         else pixel_index = x * DISPLAY_WIDTH_PAL + (ntsc_vert(screen_index, orientation) ?
-                           DISPLAY_WIDTH_NISC : DISPLAY_WIDTH_PAL) - 1 - y;
+                           DISPLAY_WIDTH_NTSC : DISPLAY_WIDTH_PAL) - 1 - y;
         if (pixel_index < 0 || pixel_index >= DISPLAY_WIDTH_PAL * DISPLAY_HEIGHT_PAL) return;
 
         uint16_t *buffer_uint16 = screen_index == 0 ?
@@ -176,7 +176,7 @@ void display_update(int screen_index, display_orientation_t orientation, display
             if(orientation == DISPLAY_ORIENTATION_HORIZONTAL)
                 pixel_index = y * DISPLAY_WIDTH_PAL + x;
             else pixel_index = x * DISPLAY_WIDTH_PAL + (ntsc_vert(screen_index, orientation) ?
-                               DISPLAY_WIDTH_NISC : DISPLAY_WIDTH_PAL) - 1 - y;
+                               DISPLAY_WIDTH_NTSC : DISPLAY_WIDTH_PAL) - 1 - y;
             internal_mask = 3 << (7 - pixel_index % 8) * 2;
             data_index = pixel_index / 8;
             extract = buffer[data_index] & ~internal_mask;

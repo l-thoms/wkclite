@@ -7,7 +7,7 @@
 #define DISPLAY_WIDTH_PAL 384
 #define DISPLAY_HEIGHT_PAL 288
 // 476.67 * 262.5 * 59.94 = 7,500,000
-#define DISPLAY_WIDTH_NISC 320
+#define DISPLAY_WIDTH_NTSC 320
 #define DISPLAY_HEIGHT_NTSC 240
 
 // XGA Format is reserved for future use.
