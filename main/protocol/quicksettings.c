@@ -194,6 +194,7 @@ int protocol_quicksettings_get_table(char *key, bool is_item)
     char chat_passkey_str[7] = { 0 };
     if (settings->chat_passkey >= 0 && settings->chat_passkey < (int)1e6)
         sprintf(chat_passkey_str, "%06d", settings->chat_passkey);
+    char *chat_passkey_options[] = { chat_passkey_str };
     wkc_table_item_t misc_items[] = {
         {
             .type = WKC_TABLE_ITEM_PICKER,
@@ -240,7 +241,7 @@ int protocol_quicksettings_get_table(char *key, bool is_item)
             .name = "chat_passkey",
             .display_name = wkc_translations_get_string("settings_chat_passkey"),
             .count = 1,
-            .options = (char**)&chat_passkey_str
+            .options = chat_passkey_options
         },
         {
             .type = WKC_TABLE_ITEM_END
@@ -326,7 +327,6 @@ uint8_t protocol_quicksettings_write(char *command)
     wkc_userprofile_t *profile = wkc_userprofile_get_current();
     wkc_settings_t *settings = wkc_settings_get_current();
     int ret = 1;
-    bool update_misc_table = false;
     do
     {
         if (!child->string) continue;
@@ -448,20 +448,23 @@ uint8_t protocol_quicksettings_write(char *command)
         }
         else if (strcmp(child->string, "chat_status") == 0)
         {
+            bool update_required = false;
             if (settings->chat_status != WKC_CHAT_STATUS_LIMITED &&
                 (int)cJSON_GetNumberValue(child) == WKC_CHAT_STATUS_LIMITED ||
                 settings->chat_status == WKC_CHAT_STATUS_LIMITED &&
                 (int)cJSON_GetNumberValue(child) != WKC_CHAT_STATUS_LIMITED)
-                update_misc_table = true;
+                update_required = true;
             settings->chat_status = clamp((int)cJSON_GetNumberValue(child), 0, 2);
             protocol_quicksettings_update();
+            if (update_required)
+                protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, "misc_settings");
             ret = 0;
         }
         else if (strcmp(child->string, "chat_passkey") == 0)
         {
-            update_misc_table = true;
             settings->chat_passkey = esp_random() % (int)1e6;
             protocol_quicksettings_update();
+            protocol_ble_notify_update_command(WKC_CATEGORY_SETTINGS, "chat_passkey");
             ret = 0;
         }
         else if (strcmp(child->string, "language") == 0)
@@ -477,10 +480,6 @@ uint8_t protocol_quicksettings_write(char *command)
         child = child->next;
     } while(child);
     wkc_userprofile_release_semaphore();
-    if (update_misc_table)
-    {
-        protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, "misc_settings");
-    }
     cJSON_Delete(command_json);
     return ret;
 }

@@ -157,6 +157,10 @@ static void ui_settings_language_action(ui_menu_item_t *item, ui_page_t *page)
     wkc_settings_save();
     // Every label comes from the loaded translations, so refresh the whole UI
     ui_shell_refresh(ui_shell_get_current());
+    // Notify phone to update whole table
+    protocol_ble_notify_update_table(WKC_CATEGORY_SHORTCUT, NULL);
+    protocol_ble_notify_update_table(WKC_CATEGORY_SETTINGS, NULL);
+
 }
 
 static void ui_settings_orientation_action(ui_menu_item_t *item, ui_page_t *page)
